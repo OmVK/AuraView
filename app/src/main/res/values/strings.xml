@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AuraView</string>
+    <string name="app_name">Aura View</string>
     <string name="accessibility_service_desc">Provides system-level gesture navigation (Back, Home, Recents) and extracts text from restricted student/exam apps for AI assistance.</string>
     <string name="notification_channel_name">AuraView Floating Assistant</string>
     <string name="notification_channel_desc">Keeps the floating ball and AI screen overlay active in background.</string>

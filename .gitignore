@@ -15,3 +15,4 @@ captures/
 *.key
 .env
 .env.*
+PROJECT_AUDIT.md
