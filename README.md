@@ -1,4 +1,4 @@
-# 🔮 AuraView (Arora-X)
+# 🔮 AuraView 
 > **Next-Gen AI Floating Assistant, Study Copilot & Power-User Suite for Android**
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B%20(API%2026--35)-green.svg)](https://developer.android.com)
