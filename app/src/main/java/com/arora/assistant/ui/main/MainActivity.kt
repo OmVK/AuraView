@@ -428,23 +428,25 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
                         NeonButton(
                             text = if (isTestingKey) "Testing..." else "Test Key",
                             onClick = {
-                                if (apiKeyInput.isBlank()) {
+                                val cleanKey = apiKeyInput.trim().replace("\n", "").replace("\r", "").replace(" ", "")
+                                if (cleanKey.isBlank()) {
                                     Toast.makeText(context, "Please paste a key first", Toast.LENGTH_SHORT).show()
                                     return@NeonButton
                                 }
                                 scope.launch {
                                     isTestingKey = true
                                     testKeyResult = null
-                                    val client = GeminiClient(apiKeyInput.trim())
-                                    val result = client.generateContent("Hello, verify key.")
+                                    val client = GeminiClient(cleanKey)
+                                    val result = client.generateContent("Hello, verify API connection.")
                                     isTestingKey = false
                                     if (result.isSuccess) {
                                         isKeyValid = true
-                                        testKeyResult = "Verified (Model: gemini-1.5-flash ready)"
-                                        appPreferences.setGeminiApiKey(apiKeyInput.trim())
+                                        testKeyResult = "✅ Connected & Verified (Gemini 1.5 Flash)"
+                                        appPreferences.setGeminiApiKey(cleanKey)
                                     } else {
                                         isKeyValid = false
-                                        testKeyResult = "Invalid Key / Network error"
+                                        val err = result.exceptionOrNull()?.message ?: "Unknown Error"
+                                        testKeyResult = err
                                     }
                                 }
                             },
