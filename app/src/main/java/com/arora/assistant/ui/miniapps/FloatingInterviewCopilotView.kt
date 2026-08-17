@@ -1,13 +1,11 @@
 package com.arora.assistant.ui.miniapps
 
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.view.HapticFeedbackConstants
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -32,17 +30,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
@@ -67,13 +65,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.arora.assistant.core.ai.ChatSessionManager
 import com.arora.assistant.core.ai.GeminiClient
 import com.arora.assistant.core.data.AppPreferences
 import com.arora.assistant.ui.components.NeonButton
@@ -118,8 +119,13 @@ fun FloatingInterviewCopilotView(
     var isCamouflaged by remember { mutableStateOf(false) }
     var copiedNotice by remember { mutableStateOf(false) }
     var apiKey by remember { mutableStateOf("") }
+
+    // Target Company / Role / Topic Context Info
+    var contextInfo by remember { mutableStateOf("") }
+    var isContextEditorOpen by remember { mutableStateOf(false) }
+
     val sessionManager = remember(apiKey) {
-        if (apiKey.isNotBlank()) com.arora.assistant.core.ai.ChatSessionManager(apiKey) else null
+        if (apiKey.isNotBlank()) ChatSessionManager(apiKey) else null
     }
 
     // Load saved API Key
@@ -147,14 +153,10 @@ fun FloatingInterviewCopilotView(
 
         scope.launch {
             isGenerating = true
-            val manager = sessionManager ?: com.arora.assistant.core.ai.ChatSessionManager(apiKey)
-            manager.personaProfile = com.arora.assistant.core.ai.UserPersonaProfile(
-                fieldOfStudy = "Software Engineering, Algorithms & System Architecture",
-                explanationStyle = "Direct, high-impact bulleted answers with STAR method for HR and Big-O complexity for Tech"
-            )
-
+            val manager = sessionManager ?: ChatSessionManager(apiKey)
+            manager.contextInfo = contextInfo
             val result = manager.sendMessage(
-                userMessage = "Interviewer Question: $promptQuestion"
+                userMessage = promptQuestion.trim()
             )
             isGenerating = false
             generatedAnswer = result.getOrElse { "Error: ${it.message}" }
@@ -200,7 +202,7 @@ fun FloatingInterviewCopilotView(
                 if (!partials.isNullOrEmpty()) {
                     val text = partials[0]
                     currentSpeechStream = text
-                    if (text.length > 25 && (text.contains("what", true) || text.contains("how", true) || text.contains("tell me", true) || text.contains("explain", true) || text.contains("why", true) || text.contains("describe", true) || text.contains("design", true))) {
+                    if (text.length > 20 && (text.contains("what", true) || text.contains("how", true) || text.contains("tell me", true) || text.contains("explain", true) || text.contains("why", true) || text.contains("describe", true) || text.contains("design", true))) {
                         detectedQuestion = text
                     }
                 }
@@ -290,13 +292,13 @@ fun FloatingInterviewCopilotView(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(40.dp)
+                        .height(38.dp)
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(40.dp)
+                        .height(38.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(PastelRose)
                         .clickable {
@@ -316,7 +318,91 @@ fun FloatingInterviewCopilotView(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Live Equalizer & Controls Strip (Re-generate, Disguise, Opacity)
+        // Target Company / Role Context Info Bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(SoftSurface.copy(alpha = 0.9f))
+                .border(0.8.dp, SkyOpal.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 8.dp, vertical = 5.dp)
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { isContextEditorOpen = !isContextEditorOpen }
+                    ) {
+                        Icon(Icons.Default.Business, null, tint = SkyOpal, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = if (contextInfo.isNotBlank()) contextInfo else "🏢 Add Target Company / Role Context",
+                            color = if (contextInfo.isNotBlank()) ElectricCyan else TextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { isContextEditorOpen = !isContextEditorOpen },
+                            modifier = Modifier.size(22.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isContextEditorOpen) Icons.Default.Check else Icons.Default.Edit,
+                                contentDescription = "Edit Context",
+                                tint = SkyOpal,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+
+                        if (contextInfo.isNotBlank()) {
+                            IconButton(
+                                onClick = { contextInfo = "" },
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(Icons.Default.Clear, "Clear Context", tint = PastelRose, modifier = Modifier.size(13.dp))
+                            }
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = isContextEditorOpen) {
+                    Column(modifier = Modifier.padding(top = 4.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(SoftSurfaceElevated)
+                                .border(0.8.dp, SoftLavender.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            if (contextInfo.isEmpty()) {
+                                Text("e.g. Google - Senior Android Engineer, or Physics Viva Exam", color = TextMuted, fontSize = 10.sp)
+                            }
+                            BasicTextField(
+                                value = contextInfo,
+                                onValueChange = { contextInfo = it },
+                                textStyle = TextStyle(color = TextPureWhite, fontSize = 11.sp),
+                                cursorBrush = SolidColor(SkyOpal),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Live Controls Strip (Session Reset, Equalizer, Panic Disguise, Opacity)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -328,15 +414,35 @@ fun FloatingInterviewCopilotView(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 if (isListening) {
-                    LiquidAudioVisualizer(modifier = Modifier.width(90.dp).height(20.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Listening...", color = SageMint, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    LiquidAudioVisualizer(modifier = Modifier.width(70.dp).height(18.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("Live", color = SageMint, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 } else {
-                    Text("🛡️ Invisible on Screen Share", color = SkyOpal, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                    val turnCount = (sessionManager?.getHistory()?.size ?: 0) / 2
+                    Text(
+                        text = if (turnCount > 0) "💬 Turn $turnCount (Memory Active)" else "🛡️ Stealth Mode",
+                        color = if (turnCount > 0) ElectricCyan else SkyOpal,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Session Reset / Clear Button
+                IconButton(
+                    onClick = {
+                        sessionManager?.clearHistory()
+                        generatedAnswer = null
+                        detectedQuestion = ""
+                        currentSpeechStream = ""
+                        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                    },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(Icons.Default.DeleteSweep, "Clear Chat Memory", tint = SoftLavender, modifier = Modifier.size(15.dp))
+                }
+
                 IconButton(
                     onClick = {
                         if (detectedQuestion.isNotBlank()) {
@@ -356,12 +462,12 @@ fun FloatingInterviewCopilotView(
                     Icon(Icons.Default.Security, "Panic Disguise", tint = SoftAmber, modifier = Modifier.size(15.dp))
                 }
 
-                Text("Opacity", color = TextMuted, fontSize = 9.sp, modifier = Modifier.padding(start = 4.dp))
+                Text("Opacity", color = TextMuted, fontSize = 9.sp, modifier = Modifier.padding(start = 2.dp))
                 Slider(
                     value = opacity,
                     onValueChange = { opacity = it },
                     valueRange = 0.35f..1.0f,
-                    modifier = Modifier.width(75.dp).padding(horizontal = 2.dp),
+                    modifier = Modifier.width(65.dp).padding(horizontal = 2.dp),
                     colors = SliderDefaults.colors(thumbColor = SoftLavender, activeTrackColor = SoftLavender)
                 )
             }

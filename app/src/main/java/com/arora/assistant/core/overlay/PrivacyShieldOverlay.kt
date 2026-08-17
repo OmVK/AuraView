@@ -1,8 +1,6 @@
 package com.arora.assistant.core.overlay
 
 import android.view.HapticFeedbackConstants
-import android.view.MotionEvent
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -46,54 +44,75 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.arora.assistant.ui.theme.PastelRose
 import com.arora.assistant.ui.theme.SageMint
 import com.arora.assistant.ui.theme.SkyOpal
 import com.arora.assistant.ui.theme.SoftCardBorder
-import com.arora.assistant.ui.theme.SoftDarkBg
 import com.arora.assistant.ui.theme.SoftLavender
 import com.arora.assistant.ui.theme.SoftSurface
 import com.arora.assistant.ui.theme.SoftSurfaceElevated
 import com.arora.assistant.ui.theme.TextMuted
-import com.arora.assistant.ui.theme.TextOffWhite
 import com.arora.assistant.ui.theme.TextPureWhite
 
 @Composable
 fun PrivacyShieldComposable(
+    onDragDelta: (Float, Float) -> Unit = { _, _ -> },
     onClose: () -> Unit
 ) {
     val view = LocalView.current
-    var opacity by remember { mutableFloatStateOf(0.92f) }
-    var heightDp by remember { mutableFloatStateOf(180f) }
+    var opacity by remember { mutableFloatStateOf(0.95f) }
+    var heightDp by remember { mutableFloatStateOf(200f) }
     var isControlExpanded by remember { mutableStateOf(false) }
-
     var isCamouflaged by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
-            .shadow(16.dp, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
+            .shadow(16.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(Color.Black.copy(alpha = if (isCamouflaged) 0.98f else opacity))
-            .border(1.5.dp, if (isCamouflaged) SageMint.copy(alpha = 0.6f) else SoftLavender.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+            .border(1.5.dp, if (isCamouflaged) SageMint.copy(alpha = 0.6f) else SoftLavender.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
     ) {
-        // Privacy Bar Header
+        // Privacy Bar Header (Draggable Handle)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SoftSurfaceElevated.copy(alpha = 0.85f))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .background(SoftSurfaceElevated.copy(alpha = 0.9f))
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        onDragDelta(dragAmount.x, dragAmount.y)
+                    }
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (isCamouflaged) Icons.Default.VisibilityOff else Icons.Default.Security, null, tint = if (isCamouflaged) SageMint else SoftLavender, modifier = Modifier.size(16.dp))
+                Icon(
+                    Icons.Default.DragHandle,
+                    contentDescription = "Drag Handle",
+                    tint = SkyOpal,
+                    modifier = Modifier.size(20.dp)
+                )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(if (isCamouflaged) "Calculator (Camouflage)" else "Privacy Shield", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Column {
+                    Text(
+                        text = if (isCamouflaged) "Calculator (Camouflage)" else "🛡️ Privacy Shield",
+                        color = TextPureWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp
+                    )
+                    Text(
+                        text = "Drag to move • Blocks shoulder-surfing",
+                        color = TextMuted,
+                        fontSize = 9.5.sp
+                    )
+                }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Camouflage toggle
                 IconButton(
                     onClick = { isCamouflaged = !isCamouflaged },
                     modifier = Modifier.size(26.dp)
@@ -105,6 +124,7 @@ fun PrivacyShieldComposable(
                         modifier = Modifier.size(16.dp)
                     )
                 }
+                // Controls toggle
                 IconButton(
                     onClick = { isControlExpanded = !isControlExpanded },
                     modifier = Modifier.size(26.dp)
@@ -116,6 +136,7 @@ fun PrivacyShieldComposable(
                         modifier = Modifier.size(16.dp)
                     )
                 }
+                // Close button
                 IconButton(
                     onClick = {
                         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -133,7 +154,7 @@ fun PrivacyShieldComposable(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SoftSurface.copy(alpha = 0.9f))
+                    .background(SoftSurface.copy(alpha = 0.92f))
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -141,7 +162,7 @@ fun PrivacyShieldComposable(
                     Slider(
                         value = opacity,
                         onValueChange = { opacity = it },
-                        valueRange = 0.4f..1.0f,
+                        valueRange = 0.3f..1.0f,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                         colors = SliderDefaults.colors(thumbColor = SoftLavender, activeTrackColor = SoftLavender)
                     )
@@ -151,7 +172,7 @@ fun PrivacyShieldComposable(
                     Slider(
                         value = heightDp,
                         onValueChange = { heightDp = it },
-                        valueRange = 100f..450f,
+                        valueRange = 100f..500f,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                         colors = SliderDefaults.colors(thumbColor = SkyOpal, activeTrackColor = SkyOpal)
                     )
@@ -163,7 +184,13 @@ fun PrivacyShieldComposable(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(if (isCamouflaged) 190.dp else heightDp.dp),
+                .height(if (isCamouflaged) 190.dp else heightDp.dp)
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        onDragDelta(dragAmount.x, dragAmount.y)
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
             if (isCamouflaged) {
@@ -189,7 +216,7 @@ fun PrivacyShieldComposable(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf("7", "8", "9", "÷", "4", "5").take(4).forEach { digit ->
+                        listOf("7", "8", "9", "÷").forEach { digit ->
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
@@ -223,11 +250,13 @@ fun PrivacyShieldComposable(
                 }
             } else {
                 Text(
-                    text = "🛡️ PROTECTED CONTENT",
-                    color = Color.White.copy(alpha = 0.25f),
+                    text = "🛡️ SHIELDED REGION\n(Drag anywhere to move)",
+                    color = Color.White.copy(alpha = 0.35f),
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
-                    fontSize = 13.sp
+                    letterSpacing = 1.5.sp,
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    lineHeight = 18.sp
                 )
             }
         }

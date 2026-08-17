@@ -20,6 +20,7 @@ interface AccessibilityDelegate {
     fun extractTextInRegion(region: RectF): String
     fun extractScreenTextHierarchy(): String
     fun getActiveRootNode(): AccessibilityNodeInfo?
+    fun clickAtCoordinates(x: Float, y: Float): Boolean
 }
 
 interface MediaProjectionDelegate {
@@ -114,4 +115,7 @@ object ServiceStateManager {
 
     fun getActiveRootNode(): AccessibilityNodeInfo? =
         accessibilityDelegateRef?.get()?.getActiveRootNode()
+
+    fun clickAtCoordinates(x: Float, y: Float): Boolean =
+        accessibilityDelegateRef?.get()?.clickAtCoordinates(x, y) ?: false
 }

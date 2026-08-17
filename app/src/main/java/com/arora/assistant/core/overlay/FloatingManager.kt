@@ -17,6 +17,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -41,11 +44,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -155,50 +160,63 @@ class FloatingManager(private val context: Context) {
         var isMinimized by mutableStateOf(false)
 
         composeView = createFloatingComposeView(params) {
-            AnimatedVisibility(
-                visible = !isMinimized,
-                enter = fadeIn() + scaleIn(spring(dampingRatio = 0.8f)),
-                exit = fadeOut() + scaleOut()
-            ) {
-                MovableSubWindowCard(
-                    title = title,
-                    icon = icon,
-                    onDrag = { dx, dy ->
-                        params.x = (params.x + dx.toInt()).coerceIn(0, screenWidth - windowWidthPx)
-                        params.y = (params.y + dy.toInt()).coerceIn(0, screenHeight - 120)
-                        updateViewLayout(composeView, params)
-                    },
-                    onMinimize = {
-                        isMinimized = true
-                        params.width = (56 * displayMetrics.density).toInt()
-                        params.height = (56 * displayMetrics.density).toInt()
-                        updateViewLayout(composeView, params)
-                    },
-                    onBackToMenu = onBackToMenu,
-                    onClose = onClose,
-                    content = content
-                )
-            }
-
-            AnimatedVisibility(
-                visible = isMinimized,
-                enter = fadeIn() + scaleIn(),
-                exit = fadeOut() + scaleOut()
-            ) {
-                MinimizedPill(
-                    icon = icon,
-                    onExpand = {
-                        isMinimized = false
-                        params.width = windowWidthPx
-                        params.height = windowHeightPx
-                        updateViewLayout(composeView, params)
-                    },
-                    onDrag = { dx, dy ->
-                        params.x = (params.x + dx.toInt()).coerceIn(0, screenWidth - (56 * displayMetrics.density).toInt())
-                        params.y = (params.y + dy.toInt()).coerceIn(0, screenHeight - (56 * displayMetrics.density).toInt())
-                        updateViewLayout(composeView, params)
+            Box(modifier = Modifier.fillMaxSize()) {
+                // ALWAYS keep window card & WebView mounted with persistent dimensions so audio decoding never stops
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(if (isMinimized) 0.005f else 1f)
+                ) {
+                    Box(
+                        modifier = if (isMinimized) {
+                            Modifier.requiredSize(widthDp.dp, heightDp.dp)
+                        } else {
+                            Modifier.fillMaxSize()
+                        }
+                    ) {
+                        MovableSubWindowCard(
+                            title = title,
+                            icon = icon,
+                            onDrag = { dx, dy ->
+                                params.x = (params.x + dx.toInt()).coerceIn(0, screenWidth - windowWidthPx)
+                                params.y = (params.y + dy.toInt()).coerceIn(0, screenHeight - 120)
+                                updateViewLayout(composeView, params)
+                            },
+                            onMinimize = {
+                                isMinimized = true
+                                params.width = (64 * displayMetrics.density).toInt()
+                                params.height = (64 * displayMetrics.density).toInt()
+                                updateViewLayout(composeView, params)
+                            },
+                            onBackToMenu = onBackToMenu,
+                            onClose = onClose,
+                            content = content
+                        )
                     }
-                )
+                }
+
+                // Render clean, non-clipped circular floating pill on top when minimized
+                if (isMinimized) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        MinimizedPill(
+                            icon = icon,
+                            onExpand = {
+                                isMinimized = false
+                                params.width = windowWidthPx
+                                params.height = windowHeightPx
+                                updateViewLayout(composeView, params)
+                            },
+                            onDrag = { dx, dy ->
+                                params.x = (params.x + dx.toInt()).coerceIn(0, screenWidth - (64 * displayMetrics.density).toInt())
+                                params.y = (params.y + dy.toInt()).coerceIn(0, screenHeight - (64 * displayMetrics.density).toInt())
+                                updateViewLayout(composeView, params)
+                            }
+                        )
+                    }
+                }
             }
         }
 
@@ -401,8 +419,7 @@ fun MinimizedPill(
 ) {
     Box(
         modifier = Modifier
-            .size(52.dp)
-            .shadow(12.dp, CircleShape, spotColor = SkyOpal)
+            .size(56.dp)
             .clip(CircleShape)
             .background(
                 Brush.linearGradient(
@@ -411,19 +428,38 @@ fun MinimizedPill(
             )
             .border(1.5.dp, SkyOpal, CircleShape)
             .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onDrag(dragAmount.x, dragAmount.y)
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var isDrag = false
+                    var totalMovement = 0f
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: break
+                        if (!change.pressed) {
+                            // Touch released / up
+                            if (!isDrag) {
+                                onExpand()
+                            }
+                            break
+                        }
+                        val dragDelta = change.position - change.previousPosition
+                        totalMovement += kotlin.math.abs(dragDelta.x) + kotlin.math.abs(dragDelta.y)
+                        if (totalMovement > 8f) {
+                            isDrag = true
+                            change.consume()
+                            onDrag(dragDelta.x, dragDelta.y)
+                        }
+                    }
                 }
-            }
-            .clickable { onExpand() },
+            },
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = "Expand Window",
             tint = SkyOpal,
-            modifier = Modifier.size(24.dp)
+            modifier = Modifier.size(26.dp)
         )
     }
 }

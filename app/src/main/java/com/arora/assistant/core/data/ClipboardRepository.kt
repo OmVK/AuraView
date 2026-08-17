@@ -51,7 +51,6 @@ class ClipboardRepository(private val context: Context) {
 
     init {
         loadEntries()
-        cleanupExpiredClips()
         try {
             clipboardManager.addPrimaryClipChangedListener(clipListener)
         } catch (e: Exception) {
@@ -70,33 +69,28 @@ class ClipboardRepository(private val context: Context) {
         return false
     }
 
-    private fun captureCurrentClip() {
-        try {
+    fun captureCurrentClip(): Boolean {
+        return try {
             val clip = clipboardManager.primaryClip
             if (clip != null && clip.itemCount > 0) {
-                if (isSensitiveClip(clip)) return
+                if (isSensitiveClip(clip)) return false
 
                 val text = clip.getItemAt(0).coerceToText(context)?.toString()?.trim()
                 if (!text.isNullOrEmpty()) {
                     addEntry(text)
+                    return true
                 }
             }
+            false
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-    }
-
-    private fun cleanupExpiredClips() {
-        val thirtyMinutesAgo = System.currentTimeMillis() - (30 * 60 * 1000)
-        val filtered = _entries.value.filter { it.isPinned || it.timestamp > thirtyMinutesAgo }
-        if (filtered.size != _entries.value.size) {
-            _entries.value = filtered
-            saveEntries()
+            false
         }
     }
 
     @Synchronized
     fun addEntry(text: String) {
+        if (text.isBlank()) return
         val currentList = _entries.value.toMutableList()
         if (currentList.isNotEmpty() && currentList.first().content == text) {
             return
@@ -104,8 +98,8 @@ class ClipboardRepository(private val context: Context) {
         currentList.removeAll { it.content == text && !it.isPinned }
         currentList.add(0, ClipboardEntry(content = text))
         
-        val thirtyMinutesAgo = System.currentTimeMillis() - (30 * 60 * 1000)
-        val validItems = currentList.filter { it.isPinned || it.timestamp > thirtyMinutesAgo }.take(50)
+        // Keep up to 100 history items permanently
+        val validItems = currentList.take(100)
 
         _entries.value = validItems
         saveEntries()
@@ -133,7 +127,7 @@ class ClipboardRepository(private val context: Context) {
 
     fun copyToClipboard(text: String) {
         try {
-            val clip = ClipData.newPlainText("Arora", text)
+            val clip = ClipData.newPlainText("AuraView", text)
             clipboardManager.setPrimaryClip(clip)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -153,7 +147,7 @@ class ClipboardRepository(private val context: Context) {
         try {
             val type = object : TypeToken<List<ClipboardEntry>>() {}.type
             val list: List<ClipboardEntry> = gson.fromJson(json, type)
-            _entries.value = list
+            _entries.value = list ?: emptyList()
         } catch (e: Exception) {
             _entries.value = emptyList()
         }

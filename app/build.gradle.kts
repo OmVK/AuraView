@@ -12,8 +12,8 @@ android {
         applicationId = "com.arora.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.0-beta.2"
+        versionCode = 3
+        versionName = "1.1.0-beta.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -80,4 +80,12 @@ dependencies {
 
     // Preferences & Storage
     implementation(libs.androidx.datastore.preferences)
+
+    // Media3 ExoPlayer (Hardware Accelerated Streaming & Background Audio)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.datasource.okhttp)
+
+    // Async Image Loader for Jetpack Compose
+    implementation(libs.coil.compose)
 }

@@ -27,6 +27,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,12 +52,14 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.West
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +91,7 @@ import com.arora.assistant.core.data.ClipboardRepository
 import com.arora.assistant.core.service.ServiceStateManager
 import com.arora.assistant.ui.components.FloatingActionHub
 import com.arora.assistant.ui.components.QuickAction
+import com.arora.assistant.ui.miniapps.CircleActionChoiceSheet
 import com.arora.assistant.ui.miniapps.CircleToSearchResultSheet
 import com.arora.assistant.ui.miniapps.FloatingAiAgentView
 import com.arora.assistant.ui.miniapps.FloatingBrowserView
@@ -122,7 +126,9 @@ class FloatingBallService : Service() {
 
     companion object {
         const val NOTIFICATION_ID = 2001
-        var isRunning = false
+        var instance: FloatingBallService? = null
+            private set
+        var isRunning: Boolean = false
             private set
     }
 
@@ -143,16 +149,19 @@ class FloatingBallService : Service() {
     private var autoHideJob: Job? = null
     private var isDockedOnRight = true
     private var isPeekingState = false
+    private var isRecordingMacro by mutableStateOf(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         isRunning = true
         ServiceStateManager.setFloatingBallActive(true)
         floatingManager = FloatingManager(this)
         appPreferences = AppPreferences(this)
         clipboardRepository = ClipboardRepository(this)
+        com.arora.assistant.core.agent.MacroRecorderEngine.init(this)
 
         val notification = createNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -166,6 +175,13 @@ class FloatingBallService : Service() {
         }
 
         initSleekRectangleCapsule()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "ACTION_OPEN_VIDEO") {
+            openVideoPlayer()
+        }
+        return START_STICKY
     }
 
     private fun initSleekRectangleCapsule() {
@@ -197,11 +213,13 @@ class FloatingBallService : Service() {
         val view = floatingManager.createFloatingComposeView(params) {
             DynamicRectangleCapsuleComposable(
                 isPeeking = isPeeking,
-                isDockedOnRight = isDockedOnRight
+                isDockedOnRight = isDockedOnRight,
+                isRecording = isRecordingMacro
             )
         }
 
         fun scheduleAutoHide() {
+            if (isRecordingMacro) return // Keep visible while recording
             autoHideJob?.cancel()
             autoHideJob = serviceScope.launch {
                 delay(3000)
@@ -261,7 +279,7 @@ class FloatingBallService : Service() {
                     val totalDeltaY = event.rawY - initialTouchY
 
                     // Detect 4-Way Flick Shortcuts on quick release
-                    val isQuickFlick = duration < 300 && (abs(totalDeltaX) > 60 || abs(totalDeltaY) > 60)
+                    val isQuickFlick = !isRecordingMacro && duration < 300 && (abs(totalDeltaX) > 60 || abs(totalDeltaY) > 60)
 
                     if (isQuickFlick) {
                         if (totalDeltaY < -60 && abs(totalDeltaY) > abs(totalDeltaX)) {
@@ -290,14 +308,22 @@ class FloatingBallService : Service() {
                         v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                         scheduleAutoHide()
                     } else if (duration < 350) {
-                        // Clean TAP -> Centered Action Hub
+                        // Clean TAP -> If recording, STOP; otherwise Open Hub
                         v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                        openFloatingActionHub()
+                        if (isRecordingMacro) {
+                            stopMacroRecording()
+                        } else {
+                            openFloatingActionHub()
+                        }
                         scheduleAutoHide()
                     } else {
                         // LONG PRESS -> WhisperFlow Transcriber
                         v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        openLiveTranscriber()
+                        if (isRecordingMacro) {
+                            stopMacroRecording()
+                        } else {
+                            openLiveTranscriber()
+                        }
                     }
                     true
                 }
@@ -334,7 +360,7 @@ class FloatingBallService : Service() {
             QuickAction("transcribe", "Live Transcriber", "Whisper Flow", Icons.Default.GraphicEq, SkyOpal, "apps") {
                 openLiveTranscriber()
             },
-            QuickAction("video", "Video Player", "Background PiP", Icons.Default.Tv, SoftLavender, "apps") {
+            QuickAction("video", "YouTube", "Ad-Free Player", Icons.Default.Tv, SoftLavender, "apps") {
                 openVideoPlayer()
             },
             QuickAction("prompter", "Teleprompter", "Voice Script", Icons.Default.TextFields, SageMint, "apps") {
@@ -437,6 +463,7 @@ class FloatingBallService : Service() {
 
     private fun processCircleSearch(rect: RectF) {
         serviceScope.launch {
+            kotlinx.coroutines.delay(80)
             val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val realMetrics = DisplayMetrics()
             @Suppress("DEPRECATION")
@@ -475,27 +502,45 @@ class FloatingBallService : Service() {
             val ocrText = if (croppedBitmap != null) {
                 try {
                     val recognized = OfflineOcrEngine.recognizeText(croppedBitmap).fullText
-                    if (recognized.isNotBlank()) {
-                        recognized
-                    } else {
-                        ServiceStateManager.extractTextInRegion(rect)
-                    }
+                    if (recognized.isNotBlank()) recognized.trim() else ""
                 } catch (e: Exception) {
-                    ServiceStateManager.extractTextInRegion(rect)
+                    ""
                 }
-            } else {
-                ServiceStateManager.extractTextInRegion(rect)
-            }
+            } else ""
 
-            openCircleResultSheet(croppedBitmap, ocrText)
+            openCircleChoiceSheet(croppedBitmap, ocrText)
         }
     }
 
-    private fun openCircleResultSheet(bitmap: Bitmap?, ocrText: String) {
+    private fun openCircleChoiceSheet(bitmap: Bitmap?, ocrText: String) {
         dismissActiveWindow()
 
-        var solutionText by mutableStateOf<String?>(null)
-        var isLoading by mutableStateOf(true)
+        val params = FloatingManager.createLayoutParams(
+            width = WindowManager.LayoutParams.MATCH_PARENT,
+            height = WindowManager.LayoutParams.WRAP_CONTENT,
+            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            gravity = Gravity.BOTTOM
+        )
+
+        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+            CircleActionChoiceSheet(
+                bitmap = bitmap,
+                ocrText = ocrText,
+                onSelectTextMode = {
+                    openCircleResultSheet(bitmap, ocrText, isVisualMode = false)
+                },
+                onSelectVisualMode = {
+                    openCircleResultSheet(bitmap, ocrText, isVisualMode = true)
+                },
+                onClose = { dismissActiveWindow() }
+            )
+        }
+    }
+
+    private fun openCircleResultSheet(bitmap: Bitmap?, ocrText: String, isVisualMode: Boolean) {
+        dismissActiveWindow()
+
         var clientInstance by mutableStateOf<GeminiClient?>(null)
 
         val params = FloatingManager.createLayoutParams(
@@ -510,8 +555,7 @@ class FloatingBallService : Service() {
             CircleToSearchResultSheet(
                 bitmap = bitmap,
                 ocrText = ocrText,
-                initialAiSolution = solutionText,
-                isLoading = isLoading,
+                initialIsVisualMode = isVisualMode,
                 geminiClient = clientInstance,
                 onClose = { dismissActiveWindow() }
             )
@@ -520,18 +564,7 @@ class FloatingBallService : Service() {
         serviceScope.launch {
             val apiKey = appPreferences.geminiApiKey.first()
             if (apiKey.isNotEmpty()) {
-                val client = GeminiClient(apiKey)
-                clientInstance = client
-                val result = ProblemSolverEngine.solveProblem(client, bitmap, ocrText)
-                isLoading = false
-                solutionText = result.getOrElse { "Error: ${it.message}" }
-            } else {
-                isLoading = false
-                solutionText = if (ocrText.isNotEmpty()) {
-                    "Recognized Text:\n\n$ocrText\n\n(Tip: Configure Gemini Key in settings to enable step-by-step reasoning)"
-                } else {
-                    "Circled region captured. Add Gemini Key in Settings for AI reasoning."
-                }
+                clientInstance = GeminiClient(apiKey)
             }
         }
     }
@@ -642,10 +675,20 @@ class FloatingBallService : Service() {
                 width = WindowManager.LayoutParams.MATCH_PARENT,
                 height = WindowManager.LayoutParams.WRAP_CONTENT,
                 flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                gravity = Gravity.CENTER
-            )
+                gravity = Gravity.TOP or Gravity.START
+            ).apply {
+                x = 0
+                y = 400
+            }
             privacyShieldWindow = floatingManager.createFloatingComposeView(params) {
                 PrivacyShieldComposable(
+                    onDragDelta = { dx, dy ->
+                        params.x += dx.toInt()
+                        params.y += dy.toInt()
+                        privacyShieldWindow?.let { win ->
+                            floatingManager.updateViewLayout(win, params)
+                        }
+                    },
                     onClose = {
                         privacyShieldWindow?.let { floatingManager.removeView(it) }
                         privacyShieldWindow = null
@@ -681,18 +724,36 @@ class FloatingBallService : Service() {
         }
     }
 
-    private fun openAiAgent() {
+    fun openAiAgent() {
         dismissActiveWindow()
         activeOverlayWindow = floatingManager.createDraggableSubWindow(
-            title = "Autonomous AI Agent",
+            title = "Touch Macros & Actions",
             icon = Icons.Default.Bolt,
             widthDp = 340,
-            heightDp = 460,
+            heightDp = 480,
             onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
             onClose = { dismissActiveWindow() }
         ) {
-            FloatingAiAgentView(onClose = { dismissActiveWindow() })
+            FloatingAiAgentView(
+                onStartRecording = { startMacroRecording() },
+                onClose = { dismissActiveWindow() }
+            )
         }
+    }
+
+    fun startMacroRecording() {
+        dismissActionHub()
+        dismissActiveWindow()
+        com.arora.assistant.core.agent.MacroRecorderEngine.startRecording()
+        isRecordingMacro = true
+        Toast.makeText(this, "🔴 Recording touch gestures! Tap anywhere, then tap Stop on the floating rectangle.", Toast.LENGTH_LONG).show()
+    }
+
+    fun stopMacroRecording() {
+        isRecordingMacro = false
+        val steps = com.arora.assistant.core.agent.MacroRecorderEngine.stopRecording()
+        Toast.makeText(this, "⏹️ Recorded ${steps.size} actions!", Toast.LENGTH_SHORT).show()
+        openAiAgent()
     }
 
     private fun startWiFiDropzone() {
@@ -728,10 +789,10 @@ class FloatingBallService : Service() {
     private fun openVideoPlayer() {
         dismissActiveWindow()
         activeOverlayWindow = floatingManager.createDraggableSubWindow(
-            title = "Video PiP Player",
+            title = "YouTube Mini",
             icon = Icons.Default.Tv,
-            widthDp = 340,
-            heightDp = 460,
+            widthDp = 350,
+            heightDp = 490,
             onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
             onClose = { dismissActiveWindow() }
         ) {
@@ -874,25 +935,26 @@ class FloatingBallService : Service() {
 @Composable
 fun DynamicRectangleCapsuleComposable(
     isPeeking: Boolean,
-    isDockedOnRight: Boolean
+    isDockedOnRight: Boolean,
+    isRecording: Boolean = false
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "CapsuleMorph")
 
     val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.97f,
-        targetValue = 1.03f,
+        initialValue = if (isRecording) 0.95f else 0.97f,
+        targetValue = if (isRecording) 1.05f else 1.03f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = FastOutSlowInEasing),
+            animation = tween(if (isRecording) 900 else 2200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "CapsuleScale"
     )
 
     val morphColor by infiniteTransition.animateColor(
-        initialValue = SoftLavender,
-        targetValue = SkyOpal,
+        initialValue = if (isRecording) PastelRose else SoftLavender,
+        targetValue = if (isRecording) Color(0xFFFF1744) else SkyOpal,
         animationSpec = infiniteRepeatable(
-            animation = tween(3800, easing = LinearEasing),
+            animation = tween(if (isRecording) 1000 else 3800, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "CapsuleMorphColor"
@@ -903,44 +965,76 @@ fun DynamicRectangleCapsuleComposable(
             .size(width = 56.dp, height = 34.dp)
             .scale(if (isPeeking) 0.88f else pulseScale)
             .shadow(
-                elevation = 12.dp,
+                elevation = if (isRecording) 16.dp else 12.dp,
                 shape = RoundedCornerShape(17.dp),
                 ambientColor = Color.Black,
-                spotColor = morphColor.copy(alpha = 0.5f)
+                spotColor = if (isRecording) PastelRose.copy(alpha = 0.8f) else morphColor.copy(alpha = 0.5f)
             )
             .clip(RoundedCornerShape(17.dp))
             .background(
                 Brush.horizontalGradient(
-                    listOf(
-                        SoftSurfaceElevated.copy(alpha = 0.95f),
-                        SoftDarkBg.copy(alpha = 0.95f)
-                    )
+                    if (isRecording) {
+                        listOf(
+                            Color(0xFF8A001A).copy(alpha = 0.95f),
+                            Color(0xFF2B0008).copy(alpha = 0.95f)
+                        )
+                    } else {
+                        listOf(
+                            SoftSurfaceElevated.copy(alpha = 0.95f),
+                            SoftDarkBg.copy(alpha = 0.95f)
+                        )
+                    }
                 )
             )
             .border(
-                1.2.dp,
-                Brush.linearGradient(listOf(morphColor, SoftCardBorder)),
+                if (isRecording) 1.5.dp else 1.2.dp,
+                Brush.linearGradient(
+                    if (isRecording) listOf(Color(0xFFFF5252), PastelRose)
+                    else listOf(morphColor, SoftCardBorder)
+                ),
                 RoundedCornerShape(17.dp)
             ),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(morphColor)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .size(width = 16.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(SkyOpal.copy(alpha = 0.75f))
-            )
+        if (isRecording) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFFF1744))
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.Stop,
+                    contentDescription = "Stop Recording",
+                    tint = Color.White,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(morphColor)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(width = 16.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(SkyOpal.copy(alpha = 0.75f))
+                )
+            }
         }
     }
 }

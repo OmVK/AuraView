@@ -437,11 +437,12 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
                                     isTestingKey = true
                                     testKeyResult = null
                                     val client = GeminiClient(cleanKey)
-                                    val result = client.generateContent("Hello, verify API connection.")
+                                    val result = client.testConnection()
                                     isTestingKey = false
                                     if (result.isSuccess) {
                                         isKeyValid = true
-                                        testKeyResult = "✅ Connected & Verified (Gemini 1.5 Flash)"
+                                        val modelName = result.getOrNull() ?: "Gemini Active"
+                                        testKeyResult = "✅ Connected & Verified ($modelName)"
                                         appPreferences.setGeminiApiKey(cleanKey)
                                     } else {
                                         isKeyValid = false

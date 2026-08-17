@@ -17,31 +17,20 @@ data class UserDemonstrationEvent(
 object AiMacroRecorder {
 
     private val recordedEvents = mutableListOf<UserDemonstrationEvent>()
-    private var isRecording = false
+    var isRecording = false
+        private set
     private val gson = Gson()
 
     const val MACRO_SYNTHESIS_PROMPT = """You observed a user perform a sequence of actions on their Android phone.
-Generalize these actions into a reusable automation macro.
+Generalize these actions into a structured explanation and reusable automation plan.
 
-Rules:
-- Replace hardcoded values with {{parameter}} placeholders where the user would want to change them
-- Add reasonable delay_ms between steps (min 200ms)
-- If the same action repeats, consolidate into a loop parameter
-
-Output a JSON macro definition:
+Output JSON:
 {
-  "macro_name": "[short descriptive name]",
-  "description": "[what this macro does]",
-  "parameters": [
-    {"name": "[param_name]", "description": "[what to substitute]", "example": "[example value]"}
-  ],
-  "steps": [
-    {
-      "action": "CLICK" | "INPUT" | "SCROLL_DOWN" | "SCROLL_UP" | "BACK" | "WAIT",
-      "target_text": "[node text or {{param_name}} for variable parts]",
-      "input_value": "[text or {{param_name}}]",
-      "delay_ms": 300
-    }
+  "macro_name": "[short descriptive title]",
+  "description": "[what this sequence accomplishes]",
+  "summary_steps": [
+    "Step 1: Description",
+    "Step 2: Description"
   ]
 }"""
 
@@ -51,7 +40,11 @@ Output a JSON macro definition:
     }
 
     fun logEvent(type: String, text: String) {
-        if (isRecording) {
+        if (isRecording && text.isNotBlank()) {
+            // Deduplicate consecutive identical events
+            if (recordedEvents.isNotEmpty() && recordedEvents.last().eventType == type && recordedEvents.last().targetText == text) {
+                return
+            }
             recordedEvents.add(UserDemonstrationEvent(type, text))
         }
     }
@@ -61,12 +54,14 @@ Output a JSON macro definition:
         return recordedEvents.toList()
     }
 
+    fun getEventCount(): Int = recordedEvents.size
+
     suspend fun synthesizeMacro(
         client: GeminiClient,
         taskName: String
     ): Result<CustomTask> = withContext(Dispatchers.IO) {
         if (recordedEvents.isEmpty()) {
-            return@withContext Result.failure(Exception("No recorded actions to compile"))
+            return@withContext Result.failure(Exception("No recorded actions to compile. Tap 'Record', perform actions on screen, and tap 'Stop'."))
         }
 
         val eventLog = gson.toJson(recordedEvents)
@@ -75,15 +70,17 @@ Output a JSON macro definition:
 Recorded actions:
 $eventLog
 
-User's description of what they were doing: "$taskName""""
+User's description: "$taskName""""
 
         val result = client.generateContent(prompt)
-        if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+        val summaryText = if (result.isSuccess) {
+            result.getOrNull() ?: ""
+        } else ""
 
         val steps = recordedEvents.mapIndexed { idx, ev ->
             TaskStep(
                 id = idx.toString(),
-                command = AroraCommand.LaunchApp(ev.targetText)
+                command = if (ev.eventType == "INPUT") AroraCommand.CopyToClipboard(ev.targetText) else AroraCommand.Delay(300)
             )
         }
 
@@ -91,7 +88,7 @@ User's description of what they were doing: "$taskName""""
             CustomTask(
                 id = java.util.UUID.randomUUID().toString(),
                 title = taskName,
-                triggerDescription = "Compiled via AI Demonstration",
+                triggerDescription = "Recorded ${recordedEvents.size} UI actions:\n" + recordedEvents.take(8).mapIndexed { i, e -> "${i + 1}. ${e.eventType}: ${e.targetText}" }.joinToString("\n") + if (recordedEvents.size > 8) "\n...and ${recordedEvents.size - 8} more" else "",
                 steps = steps
             )
         )

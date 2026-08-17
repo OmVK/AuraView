@@ -1,7 +1,6 @@
 package com.arora.assistant.core.ai
 
 import android.graphics.Bitmap
-import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -11,126 +10,142 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-data class UserPersonaProfile(
-    val fieldOfStudy: String = "Computer Science & Engineering",
-    val preferredNotation: String = "LaTeX ($$ ... $$)",
-    val explanationStyle: String = "Direct, high-impact bulleted answers with STAR method for HR and Big-O complexity for Tech",
-    val language: String = "English"
-)
-
 class ChatSessionManager(
     private val apiKey: String,
     private val defaultModel: String = "gemini-1.5-flash"
 ) {
 
     private val conversationHistory = mutableListOf<ChatMessage>()
-    private val responseCache = LruCache<String, String>(50)
-    var personaProfile = UserPersonaProfile()
-
-    companion object {
-        const val INTERVIEW_SYSTEM_PROMPT = """You are a stealth interview coach embedded on the user's phone screen.
-The user is in a live job interview or oral exam RIGHT NOW.
-
-STEP 1 — Silently classify the question into one type:
-  BEHAVIORAL  → "Tell me about", "Give an example", "Describe a time", "How did you handle"
-  TECHNICAL   → "How does X work", "Design a system", "What is the difference", "Explain the architecture"
-  CODING      → "Write a function", "How would you implement", "What is the Big-O", "Solve this"
-  VIVA        → Academic concepts, formulas, definitions, "What is", "Define", "Explain"
-
-STEP 2 — Answer in the matching format:
-
-BEHAVIORAL → STAR format:
-  • Situation: [1 sentence context]
-  • Task: [what you needed to do]
-  • Action: [3 specific actions YOU took]
-  • Result: [quantifiable outcome — %, time saved, revenue, users]
-
-TECHNICAL → Architecture format:
-  • Core answer: [direct 1-sentence answer]
-  • Key components: [bullet list of 3-4 components]
-  • Trade-offs: [2 alternatives and when to choose each]
-  • Scale consideration: [how it behaves at 10x load]
-
-CODING → Algorithm format:
-  • Approach: [high-level strategy in 2 sentences]
-  • Pseudocode: [clean, readable, language-agnostic]
-  • Complexity: Time O( ) | Space O( )
-  • Edge cases: [2-3 important edge cases to mention]
-
-VIVA → Concept format:
-  • Definition: [1 crystal-clear sentence]
-  • 3 Pillars: [three core sub-concepts]
-  • Formula/Law: [if applicable]
-  • Real-world use: [1 concrete example]
-
-RULES:
-- Maximum 120 words total. The user reads while listening — keep it scannable.
-- Never say "Great question" or add filler phrases.
-- Never reveal you are an AI assistant.
-- Output clean bullet points only. No paragraph prose."""
-
-        const val SESSION_COMPRESSION_PROMPT = """Summarize this conversation in 3 bullet points for use as session context.
-Focus on: key topics discussed, technologies mentioned, and decisions made.
-Keep each bullet under 15 words."""
-    }
+    var contextInfo: String = ""
 
     fun clearHistory() {
         conversationHistory.clear()
     }
 
-    suspend fun compressSessionContext(): Result<String> = withContext(Dispatchers.IO) {
-        if (conversationHistory.isEmpty()) return@withContext Result.success("No active history to compress.")
-        val client = GeminiClient(apiKey = apiKey, model = defaultModel)
-        val historyDump = buildString {
-            conversationHistory.forEach { append("${it.role.uppercase()}: ${it.text}\n") }
+    fun getHistory(): List<ChatMessage> = conversationHistory.toList()
+
+    companion object {
+        fun sanitizeResponse(raw: String): String {
+            if (raw.isBlank()) return ""
+
+            var text = raw.trim()
+
+            // 1. If output contains "Candidate:" quotation, extract the spoken text inside
+            val candidateMatch = Regex("""(?i)(?:>\s*)?(?:\*\*)?Candidate:(?:\*\*)?\s*["“]?([^"”\n]+(?:\s+[^"”\n]+)*)["”]?""").find(text)
+            if (candidateMatch != null) {
+                val spoken = candidateMatch.groupValues[1].trim()
+                if (spoken.length > 25) {
+                    return spoken.removeSurrounding("\"").removeSurrounding("“", "”")
+                }
+            }
+
+            // 2. If output contains "Draft 2" extract that draft
+            val draft2Pattern = Regex("""(?i)\*?\s*\*?Draft\s*2\s*(\([^)]*\))?:?\*?\s*(.*)""", RegexOption.DOT_MATCHES_ALL)
+            val draft2Match = draft2Pattern.find(text)
+            if (draft2Match != null) {
+                val extracted = draft2Match.groupValues[2].trim()
+                if (extracted.isNotBlank()) {
+                    return cleanLineArtifacts(extracted)
+                }
+            }
+
+            // 3. Drop all meta-commentary paragraphs (e.g. "Since the example...", "Depending on your actual goals...", "Here are three ways...")
+            val paragraphs = text.split("\n\n").map { it.trim() }.filter { it.isNotBlank() }
+            val cleanParagraphs = mutableListOf<String>()
+
+            for (p in paragraphs) {
+                val lower = p.lowercase()
+                val isMeta = lower.startsWith("since the example") ||
+                    lower.startsWith("depending on your") ||
+                    lower.startsWith("here are") ||
+                    lower.startsWith("option 1") ||
+                    lower.startsWith("### option") ||
+                    lower.startsWith("## option") ||
+                    lower.startsWith("*   question") ||
+                    lower.startsWith("* question") ||
+                    lower.startsWith("*   constraint") ||
+                    lower.startsWith("* constraint") ||
+                    lower.startsWith("*   step") ||
+                    lower.startsWith("the interviewer wants")
+
+                if (!isMeta) {
+                    // Clean line-level bullet markers
+                    val cleanedP = cleanLineArtifacts(p)
+                    if (cleanedP.isNotBlank() && cleanedP.length > 20) {
+                        cleanParagraphs.add(cleanedP)
+                    }
+                }
+            }
+
+            if (cleanParagraphs.isNotEmpty()) {
+                return cleanParagraphs.joinToString("\n\n").trim()
+            }
+
+            return cleanLineArtifacts(text)
         }
-        val prompt = "$SESSION_COMPRESSION_PROMPT\n\nConversation:\n$historyDump"
-        client.generateContent(prompt = prompt)
+
+        private fun cleanLineArtifacts(str: String): String {
+            return str.lines()
+                .filterNot { 
+                    val t = it.trim().lowercase()
+                    t.startsWith("*   *step") || 
+                    t.startsWith("*   step") || 
+                    t.startsWith("* step") || 
+                    t.startsWith("*   tip") ||
+                    t.startsWith("### option") ||
+                    t.startsWith("## option") ||
+                    t.startsWith("> **candidate:**") ||
+                    t.startsWith("**candidate:**")
+                }
+                .joinToString("\n")
+                .removePrefix(">")
+                .removeSurrounding("\"")
+                .removeSurrounding("“", "”")
+                .trim()
+        }
     }
 
     suspend fun sendMessage(
         userMessage: String,
         bitmap: Bitmap? = null,
-        forceProModel: Boolean = false,
-        customSystemInstruction: String = INTERVIEW_SYSTEM_PROMPT
+        forceProModel: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
-        val cacheKey = userMessage.trim().lowercase()
-        if (bitmap == null && responseCache.get(cacheKey) != null) {
-            val cached = responseCache.get(cacheKey)
-            conversationHistory.add(ChatMessage("user", userMessage))
-            conversationHistory.add(ChatMessage("model", cached))
-            return@withContext Result.success(cached)
-        }
-
-        val targetModel = if (forceProModel) "gemini-1.5-pro" else defaultModel
-        val client = GeminiClient(apiKey = apiKey, model = targetModel)
-
-        // Include rolling history (last 4 turns)
-        val historyContext = if (conversationHistory.isNotEmpty()) {
-            val recent = conversationHistory.takeLast(4)
-            buildString {
-                append("Previous Interview Context:\n")
-                recent.forEach { append("${it.role.uppercase()}: ${it.text}\n") }
-                append("\nCURRENT INTERVIEW QUESTION:\n")
-            }
-        } else ""
-
-        val finalPrompt = historyContext + userMessage
-
-        val result = client.generateContent(
-            prompt = finalPrompt,
-            bitmap = bitmap,
-            systemInstruction = customSystemInstruction
+        val client = GeminiClient(
+            apiKey = apiKey,
+            model = if (forceProModel) "gemini-1.5-pro" else defaultModel
         )
 
-        result.onSuccess { answer ->
-            conversationHistory.add(ChatMessage("user", userMessage))
-            conversationHistory.add(ChatMessage("model", answer))
-            if (bitmap == null) {
-                responseCache.put(cacheKey, answer)
+        val cleanQuestion = userMessage.trim()
+
+        val systemInstruction = buildString {
+            append("You are the candidate sitting in a live job interview or viva exam. ")
+            append("Always answer the question directly, professionally, and naturally in 1-2 spoken paragraphs in the first person ('I'). ")
+            append("Never output bulleted thinking steps, options, tips, coaching advice, markdown headers, or meta commentary. ")
+            append("Provide only the exact spoken answer you would say out loud right now.")
+            if (contextInfo.isNotBlank()) {
+                append("\nTarget Company / Role / Subject Context: ${contextInfo.trim()}")
             }
         }
 
-        result
+        // Add current user question to history
+        val currentMessages = conversationHistory.toMutableList()
+        currentMessages.add(ChatMessage("user", cleanQuestion))
+
+        val result = client.generateChat(
+            messages = currentMessages,
+            systemInstruction = systemInstruction,
+            maxTokens = 2500,
+            temperature = 0.3
+        )
+
+        if (result.isSuccess) {
+            val rawAnswer = result.getOrNull() ?: ""
+            val cleanAnswer = sanitizeResponse(rawAnswer)
+            conversationHistory.add(ChatMessage("user", cleanQuestion))
+            conversationHistory.add(ChatMessage("model", cleanAnswer))
+            Result.success(cleanAnswer)
+        } else {
+            result
+        }
     }
 }

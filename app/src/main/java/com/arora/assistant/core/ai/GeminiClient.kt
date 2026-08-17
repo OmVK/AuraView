@@ -22,15 +22,17 @@ class GeminiClient(
     companion object {
         private const val TAG = "GeminiClient"
         @Volatile
-        private var cachedWorkingModel: String? = null
+        var defaultWorkingModel: String = "gemini-1.5-flash"
         @Volatile
-        private var cachedApiVersion: String = "v1beta"
+        var defaultWorkingVersion: String = "v1beta"
+        @Volatile
+        private var isModelDiscovered: Boolean = false
     }
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -44,188 +46,255 @@ class GeminiClient(
             .replace(" ", "")
     }
 
-    /**
-     * Dynamically queries Google's listModels API to find the best available model for this API key.
-     */
-    suspend fun discoverAvailableModel(): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         val cleanKey = getSanitizedKey()
         if (cleanKey.isBlank()) {
-            return@withContext Result.failure(Exception("API key is empty"))
+            return@withContext Result.failure(Exception("API Key is empty. Please paste your key from Google AI Studio."))
         }
 
-        val versions = listOf("v1beta", "v1")
-        for (version in versions) {
+        val discoveredModels = mutableListOf<String>()
+        var lastErrorMsg = ""
+
+        for (version in listOf("v1beta", "v1")) {
             try {
                 val url = "https://generativelanguage.googleapis.com/$version/models?key=$cleanKey"
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("x-goog-api-key", cleanKey)
-                    .get()
-                    .build()
+                val req = Request.Builder().url(url).get().build()
+                val resp = client.newCall(req).execute()
+                val body = resp.body?.string()
 
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string()
-
-                if (response.isSuccessful && !responseBody.isNullOrBlank()) {
-                    val json = gson.fromJson(responseBody, JsonObject::class.java)
-                    val modelsArray = json.getAsJsonArray("models")
-                    if (modelsArray != null && modelsArray.size() > 0) {
-                        val availableModels = mutableListOf<String>()
-                        for (i in 0 until modelsArray.size()) {
-                            val m = modelsArray.get(i).asJsonObject
-                            val name = m.get("name")?.asString?.removePrefix("models/") ?: ""
-                            val supportedMethods = m.getAsJsonArray("supportedGenerationMethods")
-                            val canGenerate = supportedMethods?.any { it.asString == "generateContent" } == true
-                            if (canGenerate && name.isNotBlank()) {
-                                availableModels.add(name)
+                if (resp.isSuccessful && !body.isNullOrBlank()) {
+                    val json = gson.fromJson(body, JsonObject::class.java)
+                    val models = json.getAsJsonArray("models")
+                    if (models != null && models.size() > 0) {
+                        for (i in 0 until models.size()) {
+                            val item = models.get(i).asJsonObject
+                            val name = item.get("name")?.asString?.removePrefix("models/") ?: ""
+                            val methods = item.getAsJsonArray("supportedGenerationMethods")
+                            val canGen = methods?.any { it.asString == "generateContent" } == true
+                            if (canGen && name.isNotBlank()) {
+                                discoveredModels.add(name)
                             }
                         }
-
-                        // Select best model by priority
-                        val preferred = listOf(
-                            "gemini-1.5-flash",
-                            "gemini-2.0-flash",
-                            "gemini-2.0-flash-exp",
-                            "gemini-1.5-flash-8b",
-                            "gemini-1.5-pro",
-                            "gemini-pro"
-                        )
-
-                        val selected = preferred.firstOrNull { p -> availableModels.any { it.contains(p, ignoreCase = true) } }
-                            ?: availableModels.firstOrNull()
-
-                        if (selected != null) {
-                            cachedWorkingModel = selected
-                            cachedApiVersion = version
-                            model = selected
-                            Log.i(TAG, "Discovered working Gemini model: $selected on $version")
-                            return@withContext Result.success(selected)
-                        }
                     }
-                } else if (responseBody != null) {
-                    val errorMsg = extractErrorMessage(response.code, responseBody)
-                    // If key is invalid (400 / 403), return error immediately
-                    if (response.code == 400 || response.code == 403) {
-                        return@withContext Result.failure(Exception(errorMsg))
+                    if (discoveredModels.isNotEmpty()) {
+                        defaultWorkingVersion = version
+                        Log.i(TAG, "Discovered models on $version: $discoveredModels")
+                        break
+                    }
+                } else if (body != null) {
+                    lastErrorMsg = extractErrorMessage(resp.code, body)
+                    if (resp.code == 400 && lastErrorMsg.contains("API_KEY_INVALID", ignoreCase = true)) {
+                        return@withContext Result.failure(Exception("API Key Invalid. Please check that you copied the complete key from Google AI Studio."))
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed discovering models on $version", e)
+                lastErrorMsg = e.message ?: "Network error"
             }
         }
 
-        Result.failure(Exception("Could not find any available Gemini models for this key."))
+        val candidateModels = mutableListOf<String>()
+        val stablePriority = listOf(
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-002",
+            "gemini-2.0-flash",
+            "gemini-pro"
+        )
+
+        for (p in stablePriority) {
+            if (discoveredModels.contains(p)) {
+                candidateModels.add(p)
+            }
+        }
+
+        for (m in discoveredModels) {
+            if (!candidateModels.contains(m) && !m.contains("2.5", ignoreCase = true)) {
+                candidateModels.add(m)
+            }
+        }
+
+        if (candidateModels.isEmpty()) {
+            candidateModels.addAll(listOf("gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"))
+        }
+
+        for (candidate in candidateModels) {
+            defaultWorkingModel = candidate
+            val testResult = executeDirectGenerate(
+                cleanKey = cleanKey,
+                version = defaultWorkingVersion,
+                modelName = candidate,
+                contentsArray = listOf(mapOf("parts" to listOf(mapOf("text" to "Hello")))),
+                maxTokens = 10,
+                temperature = 0.2
+            )
+
+            if (testResult.isSuccess) {
+                isModelDiscovered = true
+                Log.i(TAG, "Successfully validated active model: $candidate")
+                return@withContext Result.success(candidate)
+            } else {
+                val err = testResult.exceptionOrNull()?.message ?: ""
+                Log.w(TAG, "Model candidate $candidate failed: $err")
+                lastErrorMsg = err
+            }
+        }
+
+        Result.failure(Exception(if (lastErrorMsg.isNotBlank()) lastErrorMsg else "Could not find a working Gemini model for this API key."))
     }
 
     suspend fun generateContent(
         prompt: String,
         bitmap: Bitmap? = null,
-        systemInstruction: String? = null
+        systemInstruction: String? = null,
+        maxTokens: Int = 2500,
+        temperature: Double = 0.2
     ): Result<String> = withContext(Dispatchers.IO) {
         val cleanKey = getSanitizedKey()
         if (cleanKey.isBlank()) {
             return@withContext Result.failure(Exception("Gemini API Key is empty. Please paste your key from Google AI Studio."))
         }
 
-        // If no working model is cached, discover it first
-        if (cachedWorkingModel == null) {
-            val discoveryResult = discoverAvailableModel()
-            if (discoveryResult.isFailure && discoveryResult.exceptionOrNull()?.message?.contains("API_KEY_INVALID", ignoreCase = true) == true) {
-                return@withContext Result.failure(discoveryResult.exceptionOrNull()!!)
-            }
+        if (!isModelDiscovered) {
+            testConnection()
         }
 
-        val targetModel = cachedWorkingModel ?: model
-        val targetVersion = cachedApiVersion
-
-        // Construct endpoints to try: [discovered model, gemini-1.5-flash, gemini-2.0-flash, gemini-pro]
-        val endpointsToTry = listOf(
-            Pair(targetVersion, targetModel),
-            Pair("v1beta", "gemini-1.5-flash"),
-            Pair("v1beta", "gemini-2.0-flash"),
-            Pair("v1", "gemini-1.5-flash"),
-            Pair("v1", "gemini-pro")
-        ).distinct()
-
-        var lastError: Exception? = null
-
-        for ((version, currentModel) in endpointsToTry) {
-            try {
-                val url = "https://generativelanguage.googleapis.com/$version/models/$currentModel:generateContent?key=$cleanKey"
-
-                val contentsArray = mutableListOf<Map<String, Any>>()
-                val partsList = mutableListOf<Map<String, Any>>()
-
-                if (bitmap != null) {
-                    val outputStream = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-                    val base64Data = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-                    partsList.add(
-                        mapOf(
-                            "inlineData" to mapOf(
-                                "mimeType" to "image/jpeg",
-                                "data" to base64Data
-                            )
-                        )
+        val partsList = mutableListOf<Map<String, Any>>()
+        if (bitmap != null) {
+            val outputStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, outputStream)
+            val base64Data = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+            partsList.add(
+                mapOf(
+                    "inlineData" to mapOf(
+                        "mimeType" to "image/jpeg",
+                        "data" to base64Data
                     )
-                }
+                )
+            )
+        }
+        partsList.add(mapOf("text" to prompt))
+        val contents = listOf(mapOf("parts" to partsList))
 
-                partsList.add(mapOf("text" to prompt))
-                contentsArray.add(mapOf("parts" to partsList))
+        executeDirectGenerate(
+            cleanKey = cleanKey,
+            version = defaultWorkingVersion,
+            modelName = defaultWorkingModel,
+            contentsArray = contents,
+            systemInstruction = systemInstruction,
+            maxTokens = maxTokens,
+            temperature = temperature
+        )
+    }
 
-                val payload = mutableMapOf<String, Any>("contents" to contentsArray)
-                if (!systemInstruction.isNullOrEmpty()) {
-                    payload["systemInstruction"] = mapOf(
-                        "parts" to listOf(mapOf("text" to systemInstruction))
-                    )
-                }
+    suspend fun generateChat(
+        messages: List<ChatMessage>,
+        systemInstruction: String? = null,
+        maxTokens: Int = 2500,
+        temperature: Double = 0.2
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanKey = getSanitizedKey()
+        if (cleanKey.isBlank()) {
+            return@withContext Result.failure(Exception("Gemini API Key is empty. Please paste your key from Google AI Studio."))
+        }
 
-                val requestBody = gson.toJson(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("x-goog-api-key", cleanKey)
-                    .addHeader("Content-Type", "application/json")
-                    .post(requestBody)
-                    .build()
+        if (!isModelDiscovered) {
+            testConnection()
+        }
 
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string()
+        val contentsArray = messages.map { msg ->
+            mapOf(
+                "role" to msg.role,
+                "parts" to listOf(mapOf("text" to msg.text))
+            )
+        }
 
-                if (!response.isSuccessful || responseBody.isNullOrBlank()) {
-                    val errorMsg = extractErrorMessage(response.code, responseBody)
-                    // If key is invalid (400/403/UNAUTHENTICATED), fail immediately without retrying other endpoints
-                    if (response.code == 400 && errorMsg.contains("API_KEY_INVALID", ignoreCase = true)) {
-                        return@withContext Result.failure(Exception(errorMsg))
-                    }
-                    if (response.code == 404) {
-                        Log.w(TAG, "Endpoint $version/models/$currentModel not found (404), trying fallback...")
-                        lastError = Exception(errorMsg)
-                        continue
-                    }
-                    return@withContext Result.failure(Exception(errorMsg))
-                }
+        executeDirectGenerate(
+            cleanKey = cleanKey,
+            version = defaultWorkingVersion,
+            modelName = defaultWorkingModel,
+            contentsArray = contentsArray,
+            systemInstruction = systemInstruction,
+            maxTokens = maxTokens,
+            temperature = temperature
+        )
+    }
 
+    private fun executeDirectGenerate(
+        cleanKey: String,
+        version: String,
+        modelName: String,
+        contentsArray: List<Map<String, Any>>,
+        systemInstruction: String? = null,
+        maxTokens: Int = 2500,
+        temperature: Double = 0.2
+    ): Result<String> {
+        val cleanModel = modelName.removePrefix("models/").trim()
+        try {
+            val url = "https://generativelanguage.googleapis.com/$version/models/$cleanModel:generateContent?key=$cleanKey"
+
+            val genConfig = mutableMapOf<String, Any>(
+                "maxOutputTokens" to maxTokens,
+                "temperature" to temperature,
+                "topP" to 0.8
+            )
+
+            val payload = mutableMapOf<String, Any>(
+                "contents" to contentsArray,
+                "generationConfig" to genConfig
+            )
+
+            if (!systemInstruction.isNullOrEmpty()) {
+                payload["systemInstruction"] = mapOf(
+                    "parts" to listOf(mapOf("text" to systemInstruction))
+                )
+            }
+
+            val requestBody = gson.toJson(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && !responseBody.isNullOrBlank()) {
                 val jsonObject = gson.fromJson(responseBody, JsonObject::class.java)
                 val candidates = jsonObject.getAsJsonArray("candidates")
                 if (candidates != null && candidates.size() > 0) {
                     val firstCandidate = candidates.get(0).asJsonObject
                     val content = firstCandidate.getAsJsonObject("content")
                     val parts = content?.getAsJsonArray("parts")
-                    val text = parts?.get(0)?.asJsonObject?.get("text")?.asString ?: ""
+                    
+                    val answerBuilder = StringBuilder()
+                    if (parts != null) {
+                        for (i in 0 until parts.size()) {
+                            val partObj = parts.get(i).asJsonObject
+                            val isThought = partObj.get("thought")?.asBoolean ?: false
+                            if (!isThought) {
+                                val partText = partObj.get("text")?.asString ?: ""
+                                answerBuilder.append(partText)
+                            }
+                        }
+                    }
 
-                    cachedWorkingModel = currentModel
-                    cachedApiVersion = version
-                    return@withContext Result.success(text)
-                } else {
-                    return@withContext Result.failure(Exception("Gemini returned empty response candidates."))
+                    val finalAnswer = if (answerBuilder.isNotBlank()) {
+                        answerBuilder.toString().trim()
+                    } else {
+                        parts?.lastOrNull()?.asJsonObject?.get("text")?.asString?.trim() ?: ""
+                    }
+
+                    return Result.success(finalAnswer)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Network error on $version/$currentModel", e)
-                lastError = e
             }
-        }
 
-        Result.failure(lastError ?: Exception("Failed to connect to Google Gemini API. Please check your internet connection."))
+            val errorMsg = extractErrorMessage(response.code, responseBody)
+            return Result.failure(Exception(errorMsg))
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
     }
 
     private fun extractErrorMessage(statusCode: Int, responseBody: String?): String {
@@ -236,7 +305,7 @@ class GeminiClient(
             val message = errorObj?.get("message")?.asString
             val status = errorObj?.get("status")?.asString
             if (!message.isNullOrBlank()) {
-                "[$status] $message"
+                if (!status.isNullOrBlank()) "[$status] $message" else message
             } else {
                 "HTTP $statusCode: ${errorObj?.toString() ?: responseBody}"
             }

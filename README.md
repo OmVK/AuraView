@@ -5,44 +5,53 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.20-purple.svg)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20M3-blue.svg)](https://developer.android.com/jetpack/compose)
 [![AI](https://img.shields.io/badge/AI-Gemini%201.5%20%7C%20Groq%20Whisper-orange.svg)](https://aistudio.google.com)
+[![Release](https://img.shields.io/github/v/release/OmVK/Arora-x?include_prereleases&label=Latest%20Release)](https://github.com/OmVK/Arora-x/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-AuraView is a state-of-the-art Android floating overlay assistant inspired by **fooView (FV 悬浮球)**, enhanced with **Multimodal AI Vision (Google Gemini 1.5)**, **Real-Time Live Speech Transcription (Groq Whisper Large-v3 LPU)**, and **100% On-Device Neural Translation & OCR**.
+AuraView is a state-of-the-art Android floating overlay assistant inspired by **fooView (FV 悬浮球)**, enhanced with **Multimodal AI Vision (Google Gemini 1.5)**, **Real-Time Live Speech Transcription (Groq Whisper Large-v3 LPU)**, **Brave-Shielded Ad-Free Floating YouTube Player with Background Audio Playback**, and **100% On-Device Neural Translation & OCR**.
 
 ---
 
 ## ✨ Features & Capabilities
 
-### 🔍 1. Circle to Search & LaTeX Math Solver
+### 🎥 1. YouTube Mini (Ad-Free PiP & Background Audio Engine)
+* **Zero Video Ads**: Multi-tier network request filtering and 0ms instant ad fast-forward engine.
+* **Seamless Background Audio Playback**: Lock visibility and keep music/podcasts streaming continuously even when minimized into a small floating bubble.
+* **Minimized Pill Mode**: Shrinks down to an interactive floating bubble with instant single-tap maximize and drag anywhere on screen.
+* **Cosmetic Shield**: Hides banner ads, sponsored cards, mastheads, and bottom navigation clutter.
+* **Slim Navigation Capsule**: Built-in Back, Forward, Home, and Reload controls with real-time "0 Ads" shield status badge.
+
+### 🔍 2. Circle to Search & LaTeX Math Solver
 * **Freeform Gesture Canvas**: Loop, circle, or lasso any equation, physics diagram, code snippet, or UI element on screen.
 * **Step-by-Step AI Proofs**: Formatted LaTeX equations, conceptual explanations, and bug fixes.
 * **Embedded Google Search**: Live web results right inside the floating sheet without switching apps.
 * **On-Device OCR & Multilingual Translation**: Instant translation across 8 languages (Hindi, Arabic, Korean, Spanish, French, German, Japanese, English).
 
-### 🎙️ 2. WhisperFlow Live Transcriber
+### 🎙️ 3. WhisperFlow Live Transcriber
 * **Dual-Mode Streaming**:
   * **Mode A (📴 Offline Neural)**: Zero internet needed, 100% private on-device speech-to-text.
   * **Mode B (⚡ Groq Whisper LPU)**: Ultra-fast cloud transcription powered by Whisper Large-v3.
 * **Smart Punctuation & Formatting**: Automatic sentence punctuation, numbering, and paragraphing.
 * **Built-in Key Tester & 1-Click Free Key Link**: Test your API key directly inside the overlay.
 
-### 🗂️ 3. PIN-Protected Wi-Fi Dropzone
+### 🗂️ 4. PIN-Protected Wi-Fi Dropzone
 * **Cableless PC ↔ Phone File Sharing**: High-speed local network transfer.
 * **Full Storage Hierarchy**: Browse `/storage/emulated/0`, drill into folders, download, delete, and upload.
 * **Dynamic 6-Digit PIN**: Authenticates clients with dynamic PIN verification and path traversal sandboxing.
 
-### 🪟 4. Floating Mini-App Suite (Jetpack Compose Overlays)
+### 🪟 5. Floating Mini-App Suite (Jetpack Compose Overlays)
+* **📺 YouTube Mini**: Floating ad-free web player with background audio keep-alive and minimize bubble.
 * **🔊 Global Volume Booster**: Hardware audio amplifier boosting speaker gain up to **+200% (+20 dB)**.
 * **📊 Speedometer & Latency Pill**: Floating live network speed counter and ping monitor.
 * **🛡️ Privacy Shield Overlay**: Adjustable 0–100% black frosted window filter to prevent shoulder-surfing.
 * **📈 2D Cartesian Graph Plotter**: Interactive function graphing engine (trig, polynomials, zoom & pan).
-* **🎥 Floating Video PiP Player**: Resizable YouTube and web video player.
+* **🌐 Floating Browser**: Minimalist floating web browser with desktop mode toggle.
 * **📜 Floating Teleprompter**: Variable auto-scrolling speed with script mirroring.
 * **📋 Smart Clipboard Stack**: Auto-categorized history (URL, Code, Math, Text) with sensitive data filtering.
 * **📁 Floating File Explorer**: Full storage explorer with MIME opening via FileProvider.
 * **📝 Notes & Anki Exporter**: Markdown note editor with TTS speech and 1-tap Anki flashcard TSV export.
 
-### 🛡️ 5. Multi-Layer Restriction Bypass Engine
+### 🛡️ 6. Multi-Layer Restriction Bypass Engine
 * **Layer 1: Android AccessibilityService**: Intercepts system gestures (Back, Home, Recents) and extracts text trees.
 * **Layer 2: MediaProjection API**: Hardware-accelerated screen capture.
 * **Layer 3: Shizuku (Wireless ADB)**: Privileged shell capture bypassing `FLAG_SECURE` app restrictions without root.
@@ -81,7 +90,7 @@ AuraView is a state-of-the-art Android floating overlay assistant inspired by **
 2. Open the project in **Android Studio (Ladybug / Iguana or newer)**.
 3. Build & Run on an Android device running **Android 8.0 (API 26) or higher** (Android 14/15 fully supported):
    ```bash
-   ./gradlew assembleDebug
+   ./gradlew assembleRelease
    ```
 4. In the app:
    * Grant **Floating Overlay Permission**.

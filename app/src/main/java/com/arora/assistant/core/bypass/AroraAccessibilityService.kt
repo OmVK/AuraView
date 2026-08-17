@@ -35,9 +35,51 @@ class AroraAccessibilityService : AccessibilityService(), AccessibilityDelegate 
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
         val textList = event.text
-        if (!textList.isNullOrEmpty()) {
-            val combined = textList.joinToString(" ")
+        val combined = if (!textList.isNullOrEmpty()) textList.joinToString(" ") else (event.contentDescription?.toString() ?: "")
+
+        if (combined.isNotBlank()) {
             com.arora.assistant.core.ai.ProactiveIntelligenceService.inspectScreenContent(combined, pkg)
+        }
+
+        // 1. Log events to Macro Recorder if active
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                val label = if (combined.isNotBlank()) combined else (event.className?.toString() ?: "Button")
+                var cx = 0f
+                var cy = 0f
+                try {
+                    val source = event.source
+                    if (source != null) {
+                        val rect = Rect()
+                        source.getBoundsInScreen(rect)
+                        if (!rect.isEmpty) {
+                            cx = rect.exactCenterX()
+                            cy = rect.exactCenterY()
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
+                com.arora.assistant.core.agent.MacroRecorderEngine.logStep("CLICK", label, cx, cy)
+                com.arora.assistant.core.agent.AiMacroRecorder.logEvent("CLICK", label)
+            }
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                if (combined.isNotBlank()) {
+                    com.arora.assistant.core.agent.MacroRecorderEngine.logStep("INPUT", combined)
+                    com.arora.assistant.core.agent.AiMacroRecorder.logEvent("INPUT", combined)
+                }
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                com.arora.assistant.core.agent.MacroRecorderEngine.logStep("SCROLL", "")
+                com.arora.assistant.core.agent.AiMacroRecorder.logEvent("SCROLL", "")
+            }
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
+                try {
+                    com.arora.assistant.core.data.ClipboardRepository(this).captureCurrentClip()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
         }
     }
 
@@ -72,6 +114,16 @@ class AroraAccessibilityService : AccessibilityService(), AccessibilityDelegate 
 
     override fun getActiveRootNode(): AccessibilityNodeInfo? = rootInActiveWindow
 
+    override fun clickAtCoordinates(x: Float, y: Float): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        val path = android.graphics.Path().apply {
+            moveTo(x, y)
+        }
+        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50)
+        val gesture = android.accessibilityservice.GestureDescription.Builder().addStroke(stroke).build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     /**
      * Captures full screen directly using Accessibility API (Android 11+ / API 30+).
      * No prompts, no background service restrictions.
@@ -88,9 +140,15 @@ class AroraAccessibilityService : AccessibilityService(), AccessibilityDelegate 
                         override fun onSuccess(screenshotResult: ScreenshotResult) {
                             val buffer = screenshotResult.hardwareBuffer
                             val colorSpace = screenshotResult.colorSpace
-                            val bitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace)
-                            val copy = bitmap?.copy(Bitmap.Config.ARGB_8888, false)
-                            buffer.close()
+                            var copy: Bitmap? = null
+                            try {
+                                val hwBitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace)
+                                copy = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                            } catch (e: Exception) {
+                                Log.e("AroraAccessibility", "Hardware buffer copy failed", e)
+                            } finally {
+                                buffer.close()
+                            }
                             if (continuation.isActive) continuation.resume(copy)
                         }
 
