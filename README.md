@@ -14,8 +14,8 @@ AuraView is a state-of-the-art Android floating overlay assistant inspired by **
 
 ## ✨ Features & Capabilities
 
-### 🎥 1. YouTube Mini (Ad-Free PiP & Background Audio Engine)
-* **Zero Video Ads**: Multi-tier network request filtering and 0ms instant ad fast-forward engine.
+### 🎥 1. YouTube Mini (Background Audio Engine)
+* **Brave browser**: Multi-tier network request filtering and 0ms instant.
 * **Seamless Background Audio Playback**: Lock visibility and keep music/podcasts streaming continuously even when minimized into a small floating bubble.
 * **Minimized Pill Mode**: Shrinks down to an interactive floating bubble with instant single-tap maximize and drag anywhere on screen.
 * **Cosmetic Shield**: Hides banner ads, sponsored cards, mastheads, and bottom navigation clutter.
