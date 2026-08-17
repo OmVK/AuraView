@@ -1,6 +1,7 @@
 package com.arora.assistant.core.bypass
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
@@ -9,54 +10,73 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.annotation.RequiresApi
+import com.arora.assistant.core.service.AccessibilityDelegate
+import com.arora.assistant.core.service.ServiceStateManager
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-class AroraAccessibilityService : AccessibilityService() {
+class AroraAccessibilityService : AccessibilityService(), AccessibilityDelegate {
 
     companion object {
         var instance: AroraAccessibilityService? = null
             private set
 
-        fun isRunning(): Boolean = instance != null
+        fun isRunning(): Boolean = ServiceStateManager.isAccessibilityActive.value
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d("AroraAccessibility", "Accessibility Service Connected")
+        ServiceStateManager.registerAccessibilityDelegate(this)
+        Log.d("AroraAccessibility", "Accessibility Service Connected & Registered with StateFlow")
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        val pkg = event.packageName?.toString() ?: ""
+        val textList = event.text
+        if (!textList.isNullOrEmpty()) {
+            val combined = textList.joinToString(" ")
+            com.arora.assistant.core.ai.ProactiveIntelligenceService.inspectScreenContent(combined, pkg)
+        }
+    }
 
     override fun onInterrupt() {
         Log.w("AroraAccessibility", "Accessibility Service Interrupted")
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        ServiceStateManager.unregisterAccessibilityDelegate()
+        instance = null
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        ServiceStateManager.unregisterAccessibilityDelegate()
         instance = null
     }
 
-    // System Navigation Actions
-    fun performBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
-    fun performHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
-    fun performRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
-    fun performNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
-    fun performQuickSettings(): Boolean = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
-    fun performLockScreen(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    // System Navigation Actions (AccessibilityDelegate implementation)
+    override fun performBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
+    override fun performHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+    override fun performRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
+    override fun performNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+    override fun performQuickSettings(): Boolean = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+    override fun performLockScreen(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
     } else false
-    fun performSplitScreen(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+    override fun performSplitScreen(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
         performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN)
     } else false
+
+    override fun getActiveRootNode(): AccessibilityNodeInfo? = rootInActiveWindow
 
     /**
      * Captures full screen directly using Accessibility API (Android 11+ / API 30+).
      * No prompts, no background service restrictions.
      */
-    suspend fun takeScreenshotBitmap(): Bitmap? {
+    override suspend fun takeScreenshot(): Bitmap? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
 
         return suspendCancellableCoroutine { continuation ->
@@ -87,10 +107,13 @@ class AroraAccessibilityService : AccessibilityService() {
         }
     }
 
+    // Backwards-compatible alias for existing calls
+    suspend fun takeScreenshotBitmap(): Bitmap? = takeScreenshot()
+
     /**
      * Extracts text ONLY from UI elements that intersect with the circled bounding box.
      */
-    fun extractTextInRegion(region: RectF): String {
+    override fun extractTextInRegion(region: RectF): String {
         val rootNode = rootInActiveWindow ?: return ""
         val builder = StringBuilder()
         val screenRect = Rect()
@@ -126,7 +149,7 @@ class AroraAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun extractScreenTextHierarchy(): String {
+    override fun extractScreenTextHierarchy(): String {
         val rootNode = rootInActiveWindow ?: return ""
         val builder = StringBuilder()
         traverseNode(rootNode, builder)

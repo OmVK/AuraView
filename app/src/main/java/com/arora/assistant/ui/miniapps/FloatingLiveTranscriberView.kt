@@ -136,6 +136,8 @@ fun FloatingLiveTranscriberView(
     var currentPartialText by remember { mutableStateOf("") }
     val transcriptList = remember { mutableStateListOf<String>() }
     var translatedText by remember { mutableStateOf<String?>(null) }
+    var isSummarizing by remember { mutableStateOf(false) }
+    var meetingSummary by remember { mutableStateOf<String?>(null) }
     var opacity by remember { mutableFloatStateOf(0.85f) }
     var copiedNotice by remember { mutableStateOf(false) }
 
@@ -660,6 +662,56 @@ fun FloatingLiveTranscriberView(
                     ) {
                         Icon(Icons.Default.Translate, "Translate Live", tint = SkyOpal, modifier = Modifier.size(15.dp))
                     }
+
+                    // 1-Tap AI Meeting Summary Button (Prompt 3)
+                    IconButton(
+                        onClick = {
+                            val combined = (transcriptList + listOf(currentPartialText)).filter { it.isNotBlank() }.joinToString(" ")
+                            if (combined.isNotBlank()) {
+                                scope.launch {
+                                    isSummarizing = true
+                                    val apiKey = appPreferences.geminiApiKey.first()
+                                    if (apiKey.isNotBlank()) {
+                                        val client = com.arora.assistant.core.ai.GeminiClient(apiKey)
+                                        val prompt = """You are a professional meeting intelligence engine.
+
+Analyze this transcript and extract ONLY what was explicitly said.
+NEVER invent names, dates, deadlines, or facts not present in the transcript.
+If something is unclear, mark it as [unclear] rather than guessing.
+
+TRANSCRIPT:
+$combined
+
+Output STRICTLY in this format — do not add any extra sections:
+
+## Summary
+[3 sentences maximum — who talked about what and what was decided]
+
+## Key Decisions
+[List only concrete decisions reached. If none, write: "No explicit decisions recorded."]
+- [decision]
+
+## Action Items
+[List only tasks explicitly assigned or volunteered. If none, write: "No action items recorded."]
+- [ ] [task] — Owner: [name if mentioned, else "Unassigned"] — Due: [date if mentioned, else "Not specified"]
+
+## Open Questions
+[Unresolved items that need follow-up]
+- [question]"""
+                                        val res = client.generateContent(prompt)
+                                        isSummarizing = false
+                                        meetingSummary = res.getOrElse { "Error: ${it.message}" }
+                                    } else {
+                                        isSummarizing = false
+                                        meetingSummary = "Add Gemini Key in Settings to generate instant AI meeting summaries & action items."
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Default.Bolt, "AI Meeting Summary", tint = SoftAmber, modifier = Modifier.size(15.dp))
+                    }
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -723,6 +775,47 @@ fun FloatingLiveTranscriberView(
                                 lineHeight = 17.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
+                        }
+                    }
+
+                    if (isSummarizing) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = SoftAmber, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Generating meeting summary & action items...", color = SoftAmber, fontSize = 11.sp)
+                        }
+                    }
+
+                    meetingSummary?.let { summary ->
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(SoftAmber.copy(alpha = 0.15f))
+                                .border(1.dp, SoftAmber.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("📝 AI Meeting Summary & Actions:", color = SoftAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    IconButton(
+                                        onClick = {
+                                            clipboardManager.setText(AnnotatedString(summary))
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, "Copy Summary", tint = SoftAmber, modifier = Modifier.size(12.dp))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(summary, color = Color.White, fontSize = 11.sp, lineHeight = 16.sp)
+                            }
                         }
                     }
 

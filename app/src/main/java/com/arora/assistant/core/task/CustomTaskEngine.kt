@@ -24,15 +24,13 @@ class CustomTaskEngine(private val context: Context) {
     }
 
     private suspend fun executeCommand(command: AroraCommand) {
-        val accessibility = AroraAccessibilityService.instance
-
         when (command) {
-            is AroraCommand.Back -> accessibility?.performBack()
-            is AroraCommand.Home -> accessibility?.performHome()
-            is AroraCommand.Recents -> accessibility?.performRecents()
-            is AroraCommand.PullNotification -> accessibility?.performNotifications()
-            is AroraCommand.LockScreen -> accessibility?.performLockScreen()
-            is AroraCommand.ToggleSplitScreen -> accessibility?.performSplitScreen()
+            is AroraCommand.Back -> com.arora.assistant.core.service.ServiceStateManager.performBack()
+            is AroraCommand.Home -> com.arora.assistant.core.service.ServiceStateManager.performHome()
+            is AroraCommand.Recents -> com.arora.assistant.core.service.ServiceStateManager.performRecents()
+            is AroraCommand.PullNotification -> com.arora.assistant.core.service.ServiceStateManager.performNotifications()
+            is AroraCommand.LockScreen -> com.arora.assistant.core.service.ServiceStateManager.performLockScreen()
+            is AroraCommand.ToggleSplitScreen -> com.arora.assistant.core.service.ServiceStateManager.performSplitScreen()
             
             is AroraCommand.Delay -> delay(command.millis)
             is AroraCommand.LaunchApp -> {

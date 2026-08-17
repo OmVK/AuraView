@@ -83,6 +83,7 @@ class NetworkSpeedMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        com.arora.assistant.core.service.ServiceStateManager.setSpeedMonitorActive(true)
         floatingManager = FloatingManager(this)
 
         val notification = NotificationCompat.Builder(this, AroraApplication.CHANNEL_ID)
@@ -195,6 +196,7 @@ class NetworkSpeedMonitorService : Service() {
         super.onDestroy()
         monitorJob?.cancel()
         speedView?.let { floatingManager.removeView(it) }
+        com.arora.assistant.core.service.ServiceStateManager.setSpeedMonitorActive(false)
         isRunning = false
     }
 }

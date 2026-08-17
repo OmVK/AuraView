@@ -5,6 +5,7 @@ import android.os.Environment
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,14 +50,15 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @Composable
 fun FloatingNotesView(
-    initialContent: String = "",
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-    var noteText by remember { mutableStateOf(initialContent.ifEmpty { "# Study Notes & Lecture Takeaways\n\n- Key Concept 1:\n- Formula:\n- Exam Question:" }) }
+    var noteText by remember { mutableStateOf("# Study Notes\n\n- Key concepts:\nQ: What is Arora?\nA: An intelligent overlay copilot.\n\n") }
     var isSpeaking by remember { mutableStateOf(false) }
 
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
@@ -73,54 +75,41 @@ fun FloatingNotesView(
         }
     }
 
-    GlassCard(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(460.dp),
-        borderGlow = true
+            .fillMaxSize()
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        // Toolbar (TTS Read Aloud)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Markdown & Flashcard Editor", color = Color.Gray, fontSize = 11.sp)
+
+            IconButton(
+                onClick = {
+                    if (isSpeaking) {
+                        tts?.stop()
+                        isSpeaking = false
+                    } else {
+                        tts?.speak(noteText, TextToSpeech.QUEUE_FLUSH, null, "note_tts")
+                        isSpeaking = true
+                    }
+                },
+                modifier = Modifier.size(28.dp)
             ) {
-                Icon(Icons.Default.EditNote, null, tint = QuantumViolet, modifier = Modifier.size(22.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Study Notes & Flashcards",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    modifier = Modifier.weight(1f)
+                Icon(
+                    Icons.Default.VolumeUp,
+                    "Read Aloud",
+                    tint = if (isSpeaking) NeonEmerald else ElectricCyan,
+                    modifier = Modifier.size(16.dp)
                 )
-
-                // Read aloud with TTS
-                IconButton(
-                    onClick = {
-                        if (isSpeaking) {
-                            tts?.stop()
-                            isSpeaking = false
-                        } else {
-                            tts?.speak(noteText, TextToSpeech.QUEUE_FLUSH, null, "note_tts")
-                            isSpeaking = true
-                        }
-                    },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.VolumeUp,
-                        "Read Aloud",
-                        tint = if (isSpeaking) NeonEmerald else Color.White
-                    )
-                }
-
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = Color.White)
-                }
             }
+        }
 
-            Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
             // Note Text Area
             OutlinedTextField(
@@ -143,6 +132,10 @@ fun FloatingNotesView(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Action Buttons
+            val appPreferences = remember { com.arora.assistant.core.data.AppPreferences(context) }
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            var isSummarizing by remember { mutableStateOf(false) }
+
             Row(modifier = Modifier.fillMaxWidth()) {
                 NeonButton(
                     text = "Save .md",
@@ -150,11 +143,11 @@ fun FloatingNotesView(
                         saveMarkdownFile(context, noteText)
                     },
                     icon = Icons.Default.Download,
-                    isPrimary = true,
+                    isPrimary = false,
                     modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
                 NeonButton(
                     text = "Export Anki",
@@ -165,10 +158,37 @@ fun FloatingNotesView(
                     isPrimary = false,
                     modifier = Modifier.weight(1f)
                 )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                NeonButton(
+                    text = if (isSummarizing) "..." else "⚡ AI Summary",
+                    onClick = {
+                        scope.launch {
+                            isSummarizing = true
+                            val apiKey = appPreferences.geminiApiKey.first()
+                            if (apiKey.isBlank()) {
+                                Toast.makeText(context, "Set Gemini API Key in Settings first", Toast.LENGTH_SHORT).show()
+                                isSummarizing = false
+                                return@launch
+                            }
+                            val client = com.arora.assistant.core.ai.GeminiClient(apiKey)
+                            val summaryResult = com.arora.assistant.core.ai.SessionSummarizer.summarizeSession(context, client)
+                            isSummarizing = false
+                            summaryResult.onSuccess { summary ->
+                                noteText = noteText + "\n\n## 📝 Session Summary\n" + summary
+                                Toast.makeText(context, "Summary appended to notes", Toast.LENGTH_SHORT).show()
+                            }.onFailure {
+                                Toast.makeText(context, "Summary error: ${it.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    isPrimary = true,
+                    modifier = Modifier.weight(1.2f)
+                )
             }
         }
     }
-}
 
 private fun saveMarkdownFile(context: Context, text: String) {
     try {

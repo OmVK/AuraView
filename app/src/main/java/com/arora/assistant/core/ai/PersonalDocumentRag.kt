@@ -1,6 +1,8 @@
 package com.arora.assistant.core.ai
 
 import android.os.Environment
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -11,7 +13,57 @@ data class RagSearchResult(
     val relevanceScore: Float
 )
 
+data class RagReRankResponse(
+    @SerializedName("ranked_indices") val rankedIndices: List<Int>,
+    @SerializedName("best_excerpt") val bestExcerpt: String,
+    @SerializedName("answer") val answer: String?
+)
+
 object PersonalDocumentRag {
+
+    private val gson = Gson()
+
+    const val RAG_RERANK_PROMPT = """You are a Document RAG Re-ranking and Synthesis Engine.
+Re-rank the retrieved document excerpts from most to least relevant to the user's query.
+
+Output JSON only:
+{
+  "ranked_indices": [1, 2, 3],
+  "best_excerpt": "[copy the single most relevant sentence from the best result]",
+  "answer": "[direct answer to the query if the excerpts contain it, else null]"
+}"""
+
+    suspend fun reRankResults(
+        client: GeminiClient,
+        query: String,
+        results: List<RagSearchResult>
+    ): Result<RagReRankResponse> = withContext(Dispatchers.IO) {
+        if (results.isEmpty()) return@withContext Result.failure(Exception("No results to re-rank"))
+
+        val excerptsDump = buildString {
+            results.forEachIndexed { index, res ->
+                append("${index + 1}. [${res.fileName}]: ${res.matchedSnippet}\n")
+            }
+        }
+
+        val prompt = """$RAG_RERANK_PROMPT
+
+The user searched for: "$query"
+
+These document excerpts were found by keyword search:
+$excerptsDump"""
+
+        val response = client.generateContent(prompt)
+        if (response.isFailure) return@withContext Result.failure(response.exceptionOrNull()!!)
+
+        val cleanJson = response.getOrNull()?.removePrefix("```json")?.removePrefix("```")?.removeSuffix("```")?.trim() ?: "{}"
+        try {
+            val parsed = gson.fromJson(cleanJson, RagReRankResponse::class.java)
+            Result.success(parsed)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     /**
      * Searches local user study files (PDFs, Markdown notes, TXT, code files in Documents/Downloads).

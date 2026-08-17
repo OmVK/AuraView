@@ -2,10 +2,15 @@ package com.arora.assistant.core.ai
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.CalendarContract
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.withContext
 import java.util.regex.Pattern
 
 enum class ProactiveType {
@@ -13,8 +18,18 @@ enum class ProactiveType {
     BILL_PAYMENT,
     TRACKING_NUMBER,
     ERROR_CODE,
-    MEETING_LINK
+    MEETING_LINK,
+    OTP,
+    PRICE_DROP
 }
+
+data class ProactiveEnrichmentResponse(
+    @SerializedName("type") val type: String,
+    @SerializedName("extracted_value") val extractedValue: String,
+    @SerializedName("suggested_action") val suggestedAction: String,
+    @SerializedName("action_label") val actionLabel: String,
+    @SerializedName("action_intent") val actionIntent: String // COPY, OPEN_MAPS, OPEN_BROWSER, OPEN_DIALER, OPEN_CALENDAR, DISMISS
+)
 
 data class ProactiveAlert(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -29,6 +44,19 @@ object ProactiveIntelligenceService {
 
     private val _alerts = MutableSharedFlow<ProactiveAlert>(extraBufferCapacity = 5)
     val alerts: SharedFlow<ProactiveAlert> = _alerts.asSharedFlow()
+    private val gson = Gson()
+
+    const val PROACTIVE_ENRICHMENT_PROMPT = """You are a Proactive Android Screen Intelligence Engine.
+The user's screen shows an actionable entity (OTP, TRACKING_NUMBER, DEADLINE, PRICE_DROP, ERROR_CODE).
+
+Output JSON only:
+{
+  "type": "OTP | TRACKING_NUMBER | DEADLINE | PRICE_DROP | ERROR_CODE",
+  "extracted_value": "[the key value]",
+  "suggested_action": "[what the user probably wants to do]",
+  "action_label": "[short button label, max 3 words]",
+  "action_intent": "COPY | OPEN_MAPS | OPEN_BROWSER | OPEN_DIALER | OPEN_CALENDAR | DISMISS"
+}"""
 
     private val DEADLINE_PATTERN = Pattern.compile(
         "(?i)(due\\s+(?:on|by|at|date:)?\\s*([A-Za-z]+ \\d{1,2}|tomorrow|today|\\d{1,2}/\\d{1,2}/\\d{2,4}|\\d{1,2}:\\d{2}\\s*(?:AM|PM)?))"
@@ -39,6 +67,28 @@ object ProactiveIntelligenceService {
     private val TRACKING_PATTERN = Pattern.compile(
         "(?i)(tracking\\s*(?:number|#)?\\s*[:]?\\s*([A-Z0-9]{10,25}))"
     )
+
+    suspend fun enrichDetectedEntity(
+        client: GeminiClient,
+        detectedType: String,
+        screenText: String
+    ): Result<ProactiveEnrichmentResponse> = withContext(Dispatchers.IO) {
+        val prompt = """$PROACTIVE_ENRICHMENT_PROMPT
+
+The user's screen shows a $detectedType.
+Screen text: "$screenText""""
+
+        val result = client.generateContent(prompt)
+        if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+
+        val cleanJson = result.getOrNull()?.removePrefix("```json")?.removePrefix("```")?.removeSuffix("```")?.trim() ?: "{}"
+        try {
+            val response = gson.fromJson(cleanJson, ProactiveEnrichmentResponse::class.java)
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     fun inspectScreenContent(text: String, packageName: String) {
         if (text.length < 5) return
@@ -75,7 +125,7 @@ object ProactiveIntelligenceService {
                 detail = "Tracking: $trackCode",
                 actionLabel = "Track Package",
                 onAction = { context ->
-                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com/search?q=$trackCode"))
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$trackCode"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(intent)
                 }

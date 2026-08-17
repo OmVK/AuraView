@@ -102,10 +102,16 @@ fun CircleToSearchResultSheet(
     val scope = rememberCoroutineScope()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    val tabs = listOf("🧠 AI Solution", "🌐 Web Search", "📋 Extracted Text", "📖 Translate")
+    val tabs = listOf("🧠 AI Solution", "🌐 Web Search", "📋 Extracted Text", "📖 Translate", "🎭 Tone Analysis", "📚 Study & Anki")
 
     var aiResponse by remember(initialAiSolution) { mutableStateOf(initialAiSolution) }
     var isQueryingAi by remember(isLoading) { mutableStateOf(isLoading) }
+
+    var toneResponse by remember { mutableStateOf<String?>(null) }
+    var isQueryingTone by remember { mutableStateOf(false) }
+
+    var studyNotesResponse by remember { mutableStateOf<String?>(null) }
+    var isQueryingStudyNotes by remember { mutableStateOf(false) }
 
     var followUpInput by remember { mutableStateOf("") }
     var translationText by remember { mutableStateOf<String?>(null) }
@@ -550,6 +556,114 @@ fun CircleToSearchResultSheet(
                                             )
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // 5. Tone Analysis & Social Subtext Tab
+                        4 -> {
+                            androidx.compose.runtime.LaunchedEffect(selectedTabIndex) {
+                                if (toneResponse == null && geminiClient != null && ocrText.isNotBlank()) {
+                                    isQueryingTone = true
+                                    val result = com.arora.assistant.core.ai.ToneAnalyzer.analyzeMessageTone(geminiClient, ocrText)
+                                    isQueryingTone = false
+                                    toneResponse = result.getOrElse { "Error: ${it.message}" }
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("🎭 Communication Subtext & Replies", color = SoftLavender, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    if (toneResponse != null) {
+                                        IconButton(
+                                            onClick = {
+                                                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                cb.setPrimaryClip(ClipData.newPlainText("Tone Analysis", toneResponse))
+                                                Toast.makeText(context, "Copied tone breakdown", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, "Copy", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                if (isQueryingTone) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = SoftLavender, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Analyzing tone and hidden intent...", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                } else {
+                                    Text(
+                                        text = toneResponse ?: if (ocrText.isBlank()) "No text detected to analyze." else "Add Gemini API Key in Settings to analyze message tone.",
+                                        color = TextPureWhite,
+                                        fontSize = 13.sp,
+                                        lineHeight = 18.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        // 6. Lecture Notes & Anki Flashcards Deck Tab
+                        5 -> {
+                            androidx.compose.runtime.LaunchedEffect(selectedTabIndex) {
+                                if (studyNotesResponse == null && geminiClient != null) {
+                                    isQueryingStudyNotes = true
+                                    val result = com.arora.assistant.core.ai.LectureNoteProcessor.processLectureFrame(geminiClient, bitmap, ocrText)
+                                    isQueryingStudyNotes = false
+                                    studyNotesResponse = result.getOrElse { "Error: ${it.message}" }
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("📚 Study Deck & Flashcards", color = SageMint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    if (studyNotesResponse != null) {
+                                        IconButton(
+                                            onClick = {
+                                                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                cb.setPrimaryClip(ClipData.newPlainText("Anki Deck", studyNotesResponse))
+                                                Toast.makeText(context, "Copied Study Notes / Anki Deck", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, "Copy", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                if (isQueryingStudyNotes) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = SageMint, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Generating study notes & Anki cards...", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                } else {
+                                    Text(
+                                        text = studyNotesResponse ?: "Add Gemini API Key in Settings to generate study notes & Anki flashcards.",
+                                        color = TextPureWhite,
+                                        fontSize = 13.sp,
+                                        lineHeight = 18.sp
+                                    )
                                 }
                             }
                         }

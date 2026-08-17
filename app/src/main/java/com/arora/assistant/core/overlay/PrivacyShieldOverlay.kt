@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arora.assistant.ui.theme.PastelRose
+import com.arora.assistant.ui.theme.SageMint
 import com.arora.assistant.ui.theme.SkyOpal
 import com.arora.assistant.ui.theme.SoftCardBorder
 import com.arora.assistant.ui.theme.SoftDarkBg
@@ -66,14 +67,16 @@ fun PrivacyShieldComposable(
     var heightDp by remember { mutableFloatStateOf(180f) }
     var isControlExpanded by remember { mutableStateOf(false) }
 
+    var isCamouflaged by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
             .shadow(16.dp, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
-            .background(Color.Black.copy(alpha = opacity))
-            .border(1.5.dp, SoftLavender.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = if (isCamouflaged) 0.98f else opacity))
+            .border(1.5.dp, if (isCamouflaged) SageMint.copy(alpha = 0.6f) else SoftLavender.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
     ) {
         // Privacy Bar Header
         Row(
@@ -85,12 +88,23 @@ fun PrivacyShieldComposable(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Security, null, tint = SoftLavender, modifier = Modifier.size(16.dp))
+                Icon(if (isCamouflaged) Icons.Default.VisibilityOff else Icons.Default.Security, null, tint = if (isCamouflaged) SageMint else SoftLavender, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Privacy Shield", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(if (isCamouflaged) "Calculator (Camouflage)" else "Privacy Shield", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { isCamouflaged = !isCamouflaged },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Visibility,
+                        "Toggle Camouflage",
+                        tint = if (isCamouflaged) SageMint else TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
                 IconButton(
                     onClick = { isControlExpanded = !isControlExpanded },
                     modifier = Modifier.size(26.dp)
@@ -115,7 +129,7 @@ fun PrivacyShieldComposable(
         }
 
         // Expandable Opacity & Height Controls
-        if (isControlExpanded) {
+        if (isControlExpanded && !isCamouflaged) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,20 +159,77 @@ fun PrivacyShieldComposable(
             }
         }
 
-        // Shield Curtain Body (Blacked out / Blur shield)
+        // Shield Curtain Body (Blackout vs Camouflage mode)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(heightDp.dp),
+                .height(if (isCamouflaged) 190.dp else heightDp.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "🛡️ PROTECTED CONTENT",
-                color = Color.White.copy(alpha = 0.25f),
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-                fontSize = 13.sp
-            )
+            if (isCamouflaged) {
+                // Realistic faux calculator display to deter onlookers
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SoftSurface)
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.CenterEnd
+                    ) {
+                        Text("3,492.50", color = TextPureWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("7", "8", "9", "÷", "4", "5").take(4).forEach { digit ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(SoftSurfaceElevated),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(digit, color = TextPureWhite, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("4", "5", "6", "×").forEach { digit ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(SoftSurfaceElevated),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(digit, color = TextPureWhite, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = "🛡️ PROTECTED CONTENT",
+                    color = Color.White.copy(alpha = 0.25f),
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.sp,
+                    fontSize = 13.sp
+                )
+            }
         }
     }
 }

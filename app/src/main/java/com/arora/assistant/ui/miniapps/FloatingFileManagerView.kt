@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Environment
 import android.webkit.MimeTypeMap
 import android.widget.Toast
-import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,7 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
@@ -41,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,101 +52,176 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import com.arora.assistant.ui.components.GlassCard
+import com.arora.assistant.core.ai.PersonalDocumentRag
+import com.arora.assistant.core.ai.RagSearchResult
 import com.arora.assistant.ui.theme.ElectricCyan
 import com.arora.assistant.ui.theme.GlassSurfaceHigh
 import com.arora.assistant.ui.theme.NeonAmber
 import com.arora.assistant.ui.theme.NeonEmerald
 import com.arora.assistant.ui.theme.QuantumViolet
+import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 
 @Composable
 fun FloatingFileManagerView(onClose: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val rootDir = remember { Environment.getExternalStorageDirectory() }
     var currentDir by remember { mutableStateOf(rootDir) }
     var searchQuery by remember { mutableStateOf("") }
 
-    val fileList = remember(currentDir, searchQuery) {
-        try {
-            val files = currentDir.listFiles()?.toList() ?: emptyList()
-            val sorted = files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-            if (searchQuery.isNotEmpty()) {
-                sorted.filter { it.name.contains(searchQuery, ignoreCase = true) }
-            } else {
-                sorted
+    var isRagSearchMode by remember { mutableStateOf(false) }
+    var ragResults by remember { mutableStateOf<List<RagSearchResult>>(emptyList()) }
+    var isSearchingRag by remember { mutableStateOf(false) }
+
+    val fileList = remember(currentDir, searchQuery, isRagSearchMode) {
+        if (isRagSearchMode) emptyList()
+        else {
+            try {
+                val files = currentDir.listFiles()?.toList() ?: emptyList()
+                val sorted = files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                if (searchQuery.isNotEmpty()) {
+                    sorted.filter { it.name.contains(searchQuery, ignoreCase = true) }
+                } else {
+                    sorted
+                }
+            } catch (e: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            emptyList()
         }
     }
 
-    GlassCard(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(460.dp),
-        borderGlow = true
+            .fillMaxSize()
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (currentDir != rootDir && currentDir.parentFile != null) {
+        // Path Navigation & RAG Toggle Strip
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                if (!isRagSearchMode && currentDir != rootDir && currentDir.parentFile != null) {
                     IconButton(
                         onClick = { currentDir = currentDir.parentFile!! },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.Default.ArrowBack, "Back", tint = ElectricCyan)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            "Parent Directory",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
-                } else {
-                    Icon(Icons.Default.Folder, null, tint = NeonAmber, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
 
+                Icon(
+                    imageVector = if (isRagSearchMode) Icons.Default.Description else Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = if (isRagSearchMode) ElectricCyan else NeonAmber,
+                    modifier = Modifier.size(18.dp)
+                )
                 Spacer(modifier = Modifier.width(6.dp))
 
                 Text(
-                    text = currentDir.name.ifEmpty { "Storage" },
+                    text = if (isRagSearchMode) "Local Docs RAG Search" else currentDir.name.ifEmpty { "Storage" },
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
+                    fontSize = 13.sp,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    overflow = TextOverflow.Ellipsis
                 )
-
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = Color.White)
-                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Search
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                placeholder = { Text("Filter files...", fontSize = 12.sp, color = Color.Gray) },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = ElectricCyan, modifier = Modifier.size(16.dp)) },
-                shape = RoundedCornerShape(8.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = GlassSurfaceHigh,
-                    unfocusedContainerColor = GlassSurfaceHigh,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedIndicatorColor = ElectricCyan,
-                    unfocusedIndicatorColor = Color.Transparent
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isRagSearchMode) ElectricCyan else GlassSurfaceHigh)
+                    .clickable {
+                        isRagSearchMode = !isRagSearchMode
+                        if (!isRagSearchMode) ragResults = emptyList()
+                    }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = if (isRagSearchMode) "📂 Files" else "🧠 RAG Search",
+                    color = if (isRagSearchMode) Color.Black else ElectricCyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Search Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = {
+                searchQuery = it
+                if (isRagSearchMode && it.length > 2) {
+                    scope.launch {
+                        isSearchingRag = true
+                        ragResults = PersonalDocumentRag.searchLocalKnowledgeBase(it)
+                        isSearchingRag = false
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+            placeholder = { Text(if (isRagSearchMode) "Search inside docs & notes..." else "Filter files...", fontSize = 12.sp, color = Color.Gray) },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = ElectricCyan, modifier = Modifier.size(16.dp)) },
+            shape = RoundedCornerShape(8.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = GlassSurfaceHigh,
+                unfocusedContainerColor = GlassSurfaceHigh,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedIndicatorColor = ElectricCyan,
+                unfocusedIndicatorColor = Color.Transparent
             )
+        )
 
-            Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-            // File List
+        if (isRagSearchMode) {
+            // RAG Results List
+            if (isSearchingRag) {
+                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("Searching local documents...", color = Color.Gray, fontSize = 12.sp)
+                }
+            } else if (ragResults.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                    Text(if (searchQuery.isBlank()) "Type a keyword to search inside local notes & docs" else "No matching snippets found", color = Color.Gray, fontSize = 12.sp)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(ragResults) { res ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(GlassSurfaceHigh)
+                                .padding(10.dp)
+                        ) {
+                            Text(res.fileName, color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(res.matchedSnippet, color = Color.White, fontSize = 11.sp, lineHeight = 16.sp)
+                        }
+                    }
+                }
+            }
+        } else {
+            // Standard File List
             if (fileList.isEmpty()) {
                 Box(
                     modifier = Modifier

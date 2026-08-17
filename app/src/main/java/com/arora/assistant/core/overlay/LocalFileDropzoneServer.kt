@@ -363,6 +363,34 @@ object LocalFileDropzoneServer {
                     return@thread
                 }
 
+                // 3.5 Push Text to Phone Clipboard Handler: POST /push-text
+                if (path.startsWith("/push-text")) {
+                    val textToPush = if (path.contains("text=")) {
+                        URLDecoder.decode(path.substringAfter("text="), "UTF-8")
+                    } else ""
+
+                    if (textToPush.isNotBlank()) {
+                        try {
+                            val clipboard = appContext?.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            val clip = android.content.ClipData.newPlainText("PC Push", textToPush)
+                            clipboard?.setPrimaryClip(clip)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
+                    val respJson = "{\"status\":\"copied\"}"
+                    val response = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/json\r\n" +
+                            "Content-Length: ${respJson.toByteArray().size}\r\n" +
+                            "Connection: close\r\n\r\n" + respJson
+
+                    output.write(response.toByteArray())
+                    output.flush()
+                    client.close()
+                    return@thread
+                }
+
                 // 4. Main Web Dashboard (Folder navigation enabled)
                 val currentBrowseDir = if (path.contains("folder=")) {
                     URLDecoder.decode(path.substringAfter("folder="), "UTF-8")
@@ -459,6 +487,15 @@ object LocalFileDropzoneServer {
                         </div>
 
                         <div class="card">
+                            <h3 style="font-size: 15px; margin-bottom: 12px; color: #F8FAFC;">📋 Push Text / Link to Phone Clipboard</h3>
+                            <div style="display:flex; gap:10px;">
+                                <input type="text" id="clipboardInput" placeholder="Paste link, note, or code snippet to copy on phone..." style="flex:1; background:#0E0E12; border:1px solid #373B4E; color:#F8FAFC; padding:10px 14px; border-radius:10px; font-size:13px; outline:none;">
+                                <button onclick="pushToClipboard()" style="background:#A78BFA; color:#0E0E12; border:none; padding:10px 16px; border-radius:10px; font-weight:bold; cursor:pointer; white-space:nowrap;">📲 Copy to Phone</button>
+                            </div>
+                            <p id="pushStatus" style="font-size: 12px; color: #34D399; margin-top: 6px; font-weight: bold;"></p>
+                        </div>
+
+                        <div class="card">
                             <h3 style="font-size: 15px; margin-bottom: 12px; color: #F8FAFC;">📤 Send Files from PC to Phone</h3>
                             <div class="dropzone" id="dropArea" onclick="document.getElementById('fileInput').click()">
                                 <p style="font-size: 28px; margin-bottom: 8px;">📁</p>
@@ -479,6 +516,23 @@ object LocalFileDropzoneServer {
                     </div>
 
                     <script>
+                        function pushToClipboard() {
+                            const input = document.getElementById('clipboardInput');
+                            const text = input.value.trim();
+                            const status = document.getElementById('pushStatus');
+                            if (!text) return;
+
+                            fetch('/push-text?text=' + encodeURIComponent(text), { method: 'POST' })
+                                .then(res => res.json())
+                                .then(data => {
+                                    status.innerText = '✓ Copied to phone clipboard!';
+                                    input.value = '';
+                                    setTimeout(() => status.innerText = '', 3000);
+                                })
+                                .catch(() => {
+                                    status.innerText = '✗ Failed to copy text.';
+                                });
+                        }
                         function handleFiles(files) {
                             if (!files || files.length === 0) return;
                             const file = files[0];
@@ -728,57 +782,26 @@ fun FloatingWiFiDropzoneDialog(
     var allowAudio by remember { mutableStateOf(LocalFileDropzoneServer.allowAudio) }
     var allowInternalStorage by remember { mutableStateOf(LocalFileDropzoneServer.allowInternalStorage) }
 
-    Box(
+    Column(
         modifier = Modifier
-            .size(width = 330.dp, height = 480.dp)
-            .shadow(24.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black, spotColor = SageMint.copy(alpha = 0.4f))
-            .clip(RoundedCornerShape(22.dp))
-            .background(SoftDarkBg.copy(alpha = 0.95f))
-            .border(1.2.dp, SageMint.copy(alpha = 0.7f), RoundedCornerShape(22.dp))
-            .padding(14.dp)
+            .fillMaxSize()
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(SageMint.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Wifi, null, tint = SageMint, modifier = Modifier.size(18.dp))
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Wi-Fi Dropzone", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Phone to PC File Sharing", color = TextMuted, fontSize = 10.sp)
-                }
-                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = TextMuted, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Master Start / Stop Controls
-            if (!isRunning) {
-                NeonButton(
-                    text = "▶ Start Dropzone Server",
-                    onClick = {
-                        scope.launch {
-                            val url = LocalFileDropzoneServer.startServer(context)
-                            serverUrl = url
-                            pairingPin = LocalFileDropzoneServer.pairingPin
-                            isRunning = true
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(40.dp)
-                )
-            } else {
+        // Master Start / Stop Controls
+        if (!isRunning) {
+            NeonButton(
+                text = "▶ Start Dropzone Server",
+                onClick = {
+                    scope.launch {
+                        val url = LocalFileDropzoneServer.startServer(context)
+                        serverUrl = url
+                        pairingPin = LocalFileDropzoneServer.pairingPin
+                        isRunning = true
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+            )
+        } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -910,7 +933,6 @@ fun FloatingWiFiDropzoneDialog(
             }
         }
     }
-}
 
 @Composable
 private fun PrivacyFilterRow(

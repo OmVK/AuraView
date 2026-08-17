@@ -1,14 +1,13 @@
 package com.arora.assistant.core.bypass
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -19,10 +18,12 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.arora.assistant.AroraApplication
 import com.arora.assistant.R
+import com.arora.assistant.core.service.MediaProjectionDelegate
+import com.arora.assistant.core.service.ServiceStateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class MediaProjectionService : Service() {
+class MediaProjectionService : Service(), MediaProjectionDelegate {
 
     companion object {
         const val EXTRA_RESULT_CODE = "result_code"
@@ -42,6 +43,7 @@ class MediaProjectionService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        ServiceStateManager.registerMediaProjectionDelegate(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -66,6 +68,23 @@ class MediaProjectionService : Service() {
         }
 
         return START_STICKY
+    }
+
+    override suspend fun captureScreen(cropRect: RectF?): Bitmap? = withContext(Dispatchers.IO) {
+        val dm = resources.displayMetrics
+        val width = dm.widthPixels
+        val height = dm.heightPixels
+        val densityDpi = dm.densityDpi
+        val full = captureScreen(width, height, densityDpi) ?: return@withContext null
+        if (cropRect != null) {
+            val cropLeft = cropRect.left.toInt().coerceIn(0, width - 1)
+            val cropTop = cropRect.top.toInt().coerceIn(0, height - 1)
+            val cropWidth = cropRect.width().toInt().coerceIn(1, width - cropLeft)
+            val cropHeight = cropRect.height().toInt().coerceIn(1, height - cropTop)
+            Bitmap.createBitmap(full, cropLeft, cropTop, cropWidth, cropHeight)
+        } else {
+            full
+        }
     }
 
     suspend fun captureScreen(width: Int, height: Int, densityDpi: Int): Bitmap? = withContext(Dispatchers.IO) {
@@ -115,6 +134,7 @@ class MediaProjectionService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        ServiceStateManager.unregisterMediaProjectionDelegate()
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()

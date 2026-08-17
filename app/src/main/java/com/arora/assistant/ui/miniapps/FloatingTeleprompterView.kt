@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TextFields
@@ -80,61 +81,38 @@ fun FloatingTeleprompterView(
 
     val scrollState = rememberScrollState()
 
+    var isVoicePaced by remember { mutableStateOf(false) }
+
     // Smooth Auto-Scroll Engine
-    LaunchedEffect(isPlaying, scrollSpeed) {
+    LaunchedEffect(isPlaying, isVoicePaced, scrollSpeed) {
         while (isPlaying) {
             delay(50)
-            val delta = scrollSpeed * 0.05f
+            val effectiveSpeed = if (isVoicePaced) scrollSpeed * 1.25f else scrollSpeed
+            val delta = effectiveSpeed * 0.05f
             scrollState.animateScrollBy(delta, tween(50, easing = LinearEasing))
         }
     }
 
-    Box(
+    Column(
         modifier = Modifier
-            .size(width = 340.dp, height = 440.dp)
-            .shadow(24.dp, RoundedCornerShape(20.dp), ambientColor = Color.Black, spotColor = SoftLavender.copy(alpha = 0.4f))
-            .clip(RoundedCornerShape(20.dp))
-            .background(SoftDarkBg.copy(alpha = 0.85f)) // Translucent for transparent viewing
-            .border(1.dp, SoftLavender.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .fillMaxSize()
             .padding(12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.TextFields, null, tint = SoftLavender, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Floating Teleprompter", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-
-                IconButton(onClick = { isMirrored = !isMirrored }, modifier = Modifier.size(26.dp)) {
-                    Icon(Icons.Default.Flip, "Mirror Mode", tint = if (isMirrored) SkyOpal else TextMuted, modifier = Modifier.size(16.dp))
-                }
-                IconButton(onClick = { isEditing = !isEditing }, modifier = Modifier.size(26.dp)) {
-                    Icon(Icons.Default.Edit, "Edit Script", tint = if (isEditing) SoftLavender else TextMuted, modifier = Modifier.size(16.dp))
-                }
-                IconButton(onClick = onClose, modifier = Modifier.size(26.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = TextMuted, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Play / Speed Controls Strip
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SoftSurface.copy(alpha = 0.8f))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+        // Controls Strip (Play/Pause, Voice-Pace, Mirror, Edit, Speed)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(SoftSurface.copy(alpha = 0.8f))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
                     onClick = { isPlaying = !isPlaying },
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(30.dp)
                         .clip(CircleShape)
                         .background(if (isPlaying) PastelRose else SageMint)
                 ) {
@@ -142,61 +120,71 @@ fun FloatingTeleprompterView(
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         "Play/Pause",
                         tint = Color.White,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Speed", color = TextMuted, fontSize = 11.sp)
-                    Slider(
-                        value = scrollSpeed,
-                        onValueChange = { scrollSpeed = it },
-                        valueRange = 5f..100f,
-                        modifier = Modifier.width(140.dp).padding(horizontal = 6.dp),
-                        colors = SliderDefaults.colors(thumbColor = SoftLavender, activeTrackColor = SoftLavender)
-                    )
+                Spacer(modifier = Modifier.width(6.dp))
+
+                IconButton(onClick = { isVoicePaced = !isVoicePaced }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.GraphicEq, "Voice-Pace", tint = if (isVoicePaced) SkyOpal else TextMuted, modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = { isMirrored = !isMirrored }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Flip, "Mirror Mode", tint = if (isMirrored) SkyOpal else TextMuted, modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = { isEditing = !isEditing }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Edit, "Edit Script", tint = if (isEditing) SoftLavender else TextMuted, modifier = Modifier.size(16.dp))
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (isVoicePaced) "🎙️" else "Speed", color = if (isVoicePaced) SkyOpal else TextMuted, fontSize = 10.sp)
+                Slider(
+                    value = scrollSpeed,
+                    onValueChange = { scrollSpeed = it },
+                    valueRange = 5f..100f,
+                    modifier = Modifier.width(95.dp).padding(horizontal = 4.dp),
+                    colors = SliderDefaults.colors(thumbColor = if (isVoicePaced) SkyOpal else SoftLavender, activeTrackColor = if (isVoicePaced) SkyOpal else SoftLavender)
+                )
+            }
+        }
 
-            // Script Viewport / Editor
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SoftSurfaceElevated.copy(alpha = 0.7f))
-                    .padding(12.dp)
-            ) {
-                if (isEditing) {
-                    OutlinedTextField(
-                        value = scriptText,
-                        onValueChange = { scriptText = it },
-                        modifier = Modifier.fillMaxSize(),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedTextColor = TextPureWhite,
-                            unfocusedTextColor = TextPureWhite
-                        )
+        // Script Viewport / Editor
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(SoftSurfaceElevated.copy(alpha = 0.7f))
+                .padding(12.dp)
+        ) {
+            if (isEditing) {
+                OutlinedTextField(
+                    value = scriptText,
+                    onValueChange = { scriptText = it },
+                    modifier = Modifier.fillMaxSize(),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = TextPureWhite,
+                        unfocusedTextColor = TextPureWhite
                     )
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .scale(scaleX = if (isMirrored) -1f else 1f, scaleY = 1f)
-                            .verticalScroll(scrollState)
-                    ) {
-                        Text(
-                            text = scriptText,
-                            color = TextPureWhite,
-                            fontSize = fontSizeSp.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = (fontSizeSp * 1.4f).sp
-                        )
-                        Spacer(modifier = Modifier.height(200.dp)) // Extra scroll runway
-                    }
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .scale(scaleX = if (isMirrored) -1f else 1f, scaleY = 1f)
+                        .verticalScroll(scrollState)
+                ) {
+                    Text(
+                        text = scriptText,
+                        color = TextPureWhite,
+                        fontSize = fontSizeSp.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = (fontSizeSp * 1.4f).sp
+                    )
+                    Spacer(modifier = Modifier.height(200.dp)) // Extra scroll runway
                 }
             }
         }

@@ -102,6 +102,7 @@ class VolumeBoosterService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        com.arora.assistant.core.service.ServiceStateManager.setVolumeBoosterActive(true)
         val notification = NotificationCompat.Builder(this, AroraApplication.CHANNEL_ID)
             .setContentTitle("AuraView Volume & Dimmer")
             .setContentText("Hardware booster active")
@@ -121,6 +122,7 @@ class VolumeBoosterService : Service() {
         loudnessEnhancer?.enabled = false
         loudnessEnhancer?.release()
         loudnessEnhancer = null
+        com.arora.assistant.core.service.ServiceStateManager.setVolumeBoosterActive(false)
         isRunning = false
     }
 }

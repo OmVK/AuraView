@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Adjust
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Crop
@@ -76,6 +77,7 @@ import com.arora.assistant.R
 import com.arora.assistant.core.ai.FloatingGraphPlotterView
 import com.arora.assistant.core.ai.GeminiClient
 import com.arora.assistant.core.ai.OfflineOcrEngine
+import com.arora.assistant.core.ai.OfflineTranslationEngine
 import com.arora.assistant.core.ai.ProblemSolverEngine
 import com.arora.assistant.core.bypass.AroraAccessibilityService
 import com.arora.assistant.core.bypass.MediaProjectionService
@@ -83,17 +85,21 @@ import com.arora.assistant.core.bypass.RootCaptureFallback
 import com.arora.assistant.core.bypass.ShizukuBypassService
 import com.arora.assistant.core.data.AppPreferences
 import com.arora.assistant.core.data.ClipboardRepository
+import com.arora.assistant.core.service.ServiceStateManager
 import com.arora.assistant.ui.components.FloatingActionHub
 import com.arora.assistant.ui.components.QuickAction
 import com.arora.assistant.ui.miniapps.CircleToSearchResultSheet
+import com.arora.assistant.ui.miniapps.FloatingAiAgentView
 import com.arora.assistant.ui.miniapps.FloatingBrowserView
 import com.arora.assistant.ui.miniapps.FloatingCalculatorView
 import com.arora.assistant.ui.miniapps.FloatingClipboardView
 import com.arora.assistant.ui.miniapps.FloatingFileManagerView
+import com.arora.assistant.ui.miniapps.FloatingInterviewCopilotView
 import com.arora.assistant.ui.miniapps.FloatingLiveTranscriberView
 import com.arora.assistant.ui.miniapps.FloatingNotesView
 import com.arora.assistant.ui.miniapps.FloatingTeleprompterView
 import com.arora.assistant.ui.miniapps.FloatingVideoPlayerView
+import com.arora.assistant.ui.theme.ElectricCyan
 import com.arora.assistant.ui.theme.PastelRose
 import com.arora.assistant.ui.theme.SageMint
 import com.arora.assistant.ui.theme.SkyOpal
@@ -143,6 +149,7 @@ class FloatingBallService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        ServiceStateManager.setFloatingBallActive(true)
         floatingManager = FloatingManager(this)
         appPreferences = AppPreferences(this)
         clipboardRepository = ClipboardRepository(this)
@@ -240,7 +247,7 @@ class FloatingBallService : Service() {
                     val deltaX = (event.rawX - initialTouchX).toInt()
                     val deltaY = (event.rawY - initialTouchY).toInt()
 
-                    if (abs(deltaX) > 6 || abs(deltaY) > 6) {
+                    if (abs(deltaX) > 8 || abs(deltaY) > 8) {
                         isDragging = true
                         params.x = (initialX + deltaX).coerceIn(0, screenWidth - pillWidthPx)
                         params.y = (initialY + deltaY).coerceIn(0, screenHeight - pillHeightPx)
@@ -250,19 +257,47 @@ class FloatingBallService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     val duration = System.currentTimeMillis() - touchStartTime
-                    if (isDragging) {
+                    val totalDeltaX = event.rawX - initialTouchX
+                    val totalDeltaY = event.rawY - initialTouchY
+
+                    // Detect 4-Way Flick Shortcuts on quick release
+                    val isQuickFlick = duration < 300 && (abs(totalDeltaX) > 60 || abs(totalDeltaY) > 60)
+
+                    if (isQuickFlick) {
+                        if (totalDeltaY < -60 && abs(totalDeltaY) > abs(totalDeltaX)) {
+                            // Flick UP -> Circle to Search / Lasso
+                            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            startCircleToSearch()
+                        } else if (totalDeltaY > 60 && abs(totalDeltaY) > abs(totalDeltaX)) {
+                            // Flick DOWN -> Notification Shade
+                            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            ServiceStateManager.performNotifications()
+                        } else if ((isDockedOnRight && totalDeltaX < -60) || (!isDockedOnRight && totalDeltaX > 60)) {
+                            // Flick INWARD -> Back Navigation
+                            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            ServiceStateManager.performBack()
+                        } else {
+                            // Settle to screen edge
+                            isDockedOnRight = event.rawX > screenWidth / 2
+                            params.x = if (isDockedOnRight) screenWidth - pillWidthPx else 0
+                            floatingManager.updateViewLayout(view, params)
+                            scheduleAutoHide()
+                        }
+                    } else if (isDragging) {
                         isDockedOnRight = event.rawX > screenWidth / 2
                         params.x = if (isDockedOnRight) screenWidth - pillWidthPx else 0
                         floatingManager.updateViewLayout(view, params)
                         v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                         scheduleAutoHide()
                     } else if (duration < 350) {
+                        // Clean TAP -> Centered Action Hub
                         v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                         openFloatingActionHub()
                         scheduleAutoHide()
                     } else {
+                        // LONG PRESS -> WhisperFlow Transcriber
                         v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        startCircleToSearch()
+                        openLiveTranscriber()
                     }
                     true
                 }
@@ -287,6 +322,12 @@ class FloatingBallService : Service() {
 
         val hubActions = listOf(
             // Category 0: Apps & Tools
+            QuickAction("interview", "Interview & Exam AI", "Live STAR & Answers", Icons.Default.AutoAwesome, SkyOpal, "apps") {
+                openInterviewCopilot()
+            },
+            QuickAction("agent", "Autonomous AI Agent", "UI Actions & Macros", Icons.Default.Bolt, ElectricCyan, "apps") {
+                openAiAgent()
+            },
             QuickAction("browser", "Browser", "Floating Web", Icons.Default.Language, SkyOpal, "apps") {
                 openMiniBrowser()
             },
@@ -336,10 +377,10 @@ class FloatingBallService : Service() {
 
             // System Actions
             QuickAction("back", "Back", "System Action", Icons.Default.West, Color.White, "system") {
-                AroraAccessibilityService.instance?.performBack()
+                ServiceStateManager.performBack()
             },
             QuickAction("home", "Home", "System Action", Icons.Default.Home, Color.White, "system") {
-                AroraAccessibilityService.instance?.performHome()
+                ServiceStateManager.performHome()
             }
         )
 
@@ -405,12 +446,10 @@ class FloatingBallService : Service() {
 
             var fullBitmap: Bitmap? = null
 
-            // 1. Instant Hardware Screenshot via Accessibility API (Android 11+)
-            if (AroraAccessibilityService.isRunning()) {
-                fullBitmap = AroraAccessibilityService.instance?.takeScreenshotBitmap()
-            }
+            // 1. Decoupled Multi-Tier Capture (Accessibility API / MediaProjection)
+            fullBitmap = ServiceStateManager.takeScreenshot()
 
-            // 2. Shizuku / Wireless ADB Capture
+            // 2. Shizuku / Wireless ADB Capture Fallback
             if (fullBitmap == null && ShizukuBypassService.hasShizukuPermission()) {
                 fullBitmap = ShizukuBypassService.captureSecureScreen()
             }
@@ -418,15 +457,6 @@ class FloatingBallService : Service() {
             // 3. Root Capture Fallback
             if (fullBitmap == null && RootCaptureFallback.isRootAvailable()) {
                 fullBitmap = RootCaptureFallback.captureRootScreen()
-            }
-
-            // 4. MediaProjection Fallback
-            if (fullBitmap == null && MediaProjectionService.instance != null) {
-                fullBitmap = MediaProjectionService.instance?.captureScreen(
-                    realScreenWidth,
-                    realScreenHeight,
-                    realMetrics.densityDpi
-                )
             }
 
             var croppedBitmap: Bitmap? = null
@@ -448,13 +478,13 @@ class FloatingBallService : Service() {
                     if (recognized.isNotBlank()) {
                         recognized
                     } else {
-                        AroraAccessibilityService.instance?.extractTextInRegion(rect) ?: ""
+                        ServiceStateManager.extractTextInRegion(rect)
                     }
                 } catch (e: Exception) {
-                    AroraAccessibilityService.instance?.extractTextInRegion(rect) ?: ""
+                    ServiceStateManager.extractTextInRegion(rect)
                 }
             } else {
-                AroraAccessibilityService.instance?.extractTextInRegion(rect) ?: ""
+                ServiceStateManager.extractTextInRegion(rect)
             }
 
             openCircleResultSheet(croppedBitmap, ocrText)
@@ -510,16 +540,23 @@ class FloatingBallService : Service() {
         dismissActiveWindow()
         serviceScope.launch {
             Toast.makeText(this@FloatingBallService, "Scanning screen for AR translation...", Toast.LENGTH_SHORT).show()
-            val bitmap = AroraAccessibilityService.instance?.takeScreenshotBitmap()
+            val bitmap = ServiceStateManager.takeScreenshot()
             if (bitmap != null) {
                 val ocrResult = OfflineOcrEngine.recognizeText(bitmap)
                 val blocks = mutableListOf<TranslatedBlock>()
 
+                val apiKey = appPreferences.geminiApiKey.first()
+                val geminiClient = if (apiKey.isNotBlank()) GeminiClient(apiKey) else null
+
                 for (line in ocrResult.lines) {
                     val original = line.text
-                    val translated = com.arora.assistant.core.ai.OfflineTranslationEngine.translateOnDevice(original, "Hindi").getOrDefault(original)
+                    var translated = com.arora.assistant.core.ai.OfflineTranslationEngine.translateOnDevice(original, "Hindi").getOrNull()
+                    if (translated == null && geminiClient != null) {
+                        translated = com.arora.assistant.core.ai.InPlaceTranslator.translateContent(geminiClient, original, "Hindi").getOrNull()
+                    }
+                    val finalTranslation = translated ?: original
                     val box = line.boundingBox ?: Rect(0, 0, 100, 40)
-                    blocks.add(TranslatedBlock(box, original, translated))
+                    blocks.add(TranslatedBlock(box, original, finalTranslation))
                 }
 
                 val params = FloatingManager.createLayoutParams(
@@ -539,21 +576,20 @@ class FloatingBallService : Service() {
                     )
                 }
             } else {
-                Toast.makeText(this@FloatingBallService, "Ensure Accessibility Permission is enabled", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@FloatingBallService, "Could not capture screen for translation", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun openVolumeAndDimmerDialog() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = WindowManager.LayoutParams.WRAP_CONTENT,
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Volume & Dimmer",
+            icon = Icons.Default.VolumeUp,
+            widthDp = 340,
+            heightDp = 440,
+            onClose = { dismissActiveWindow() }
+        ) {
             VolumeAndDimmerControlDialog(
                 onBoostChange = { level ->
                     VolumeBoosterService.setBoost(level)
@@ -620,7 +656,7 @@ class FloatingBallService : Service() {
     }
 
     private fun toggleSpeedometer() {
-        if (NetworkSpeedMonitorService.isRunning) {
+        if (ServiceStateManager.isSpeedMonitorActive.value) {
             stopService(Intent(this, NetworkSpeedMonitorService::class.java))
             Toast.makeText(this, "Speedometer Stopped", Toast.LENGTH_SHORT).show()
         } else {
@@ -629,15 +665,46 @@ class FloatingBallService : Service() {
         }
     }
 
+    private fun openInterviewCopilot() {
+        dismissActiveWindow()
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "AI Interview & Exam Copilot",
+            icon = Icons.Default.AutoAwesome,
+            widthDp = 340,
+            heightDp = 460,
+            isSecure = true,
+            initialYDp = 48,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
+            FloatingInterviewCopilotView(onClose = { dismissActiveWindow() })
+        }
+    }
+
+    private fun openAiAgent() {
+        dismissActiveWindow()
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Autonomous AI Agent",
+            icon = Icons.Default.Bolt,
+            widthDp = 340,
+            heightDp = 460,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
+            FloatingAiAgentView(onClose = { dismissActiveWindow() })
+        }
+    }
+
     private fun startWiFiDropzone() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = WindowManager.LayoutParams.WRAP_CONTENT,
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Wi-Fi Dropzone",
+            icon = Icons.Default.Wifi,
+            widthDp = 340,
+            heightDp = 460,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingWiFiDropzoneDialog(
                 onClose = { dismissActiveWindow() }
             )
@@ -646,120 +713,130 @@ class FloatingBallService : Service() {
 
     private fun openLiveTranscriber() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (460 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER_VERTICAL or Gravity.END
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Live Transcriber",
+            icon = Icons.Default.GraphicEq,
+            widthDp = 340,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingLiveTranscriberView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openVideoPlayer() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (460 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Video PiP Player",
+            icon = Icons.Default.Tv,
+            widthDp = 340,
+            heightDp = 460,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingVideoPlayerView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openTeleprompter() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (440 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Teleprompter",
+            icon = Icons.Default.TextFields,
+            widthDp = 340,
+            heightDp = 460,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingTeleprompterView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openGraphPlotter() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (440 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "2D Graph Plotter",
+            icon = Icons.Default.Functions,
+            widthDp = 340,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingGraphPlotterView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openMiniBrowser() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (480 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Mini Browser",
+            icon = Icons.Default.Language,
+            widthDp = 350,
+            heightDp = 500,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingBrowserView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openClipboardStack() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (440 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Smart Clipboard",
+            icon = Icons.Default.ContentCopy,
+            widthDp = 340,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingClipboardView(repository = clipboardRepository, onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openCalculator() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (320 * resources.displayMetrics.density).toInt(),
-            height = (460 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Scientific Calculator",
+            icon = Icons.Default.Calculate,
+            widthDp = 330,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingCalculatorView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openNotes() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (460 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Study Notes & Anki",
+            icon = Icons.Default.Notes,
+            widthDp = 340,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingNotesView(onClose = { dismissActiveWindow() })
         }
     }
 
     private fun openFileManager() {
         dismissActiveWindow()
-        val params = FloatingManager.createLayoutParams(
-            width = (340 * resources.displayMetrics.density).toInt(),
-            height = (460 * resources.displayMetrics.density).toInt(),
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            gravity = Gravity.CENTER
-        )
-        activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
+        activeOverlayWindow = floatingManager.createDraggableSubWindow(
+            title = "Storage Explorer",
+            icon = Icons.Default.Folder,
+            widthDp = 340,
+            heightDp = 480,
+            onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },
+            onClose = { dismissActiveWindow() }
+        ) {
             FloatingFileManagerView(onClose = { dismissActiveWindow() })
         }
     }
+
 
     private fun dismissActiveWindow() {
         activeOverlayWindow?.let {
@@ -789,6 +866,7 @@ class FloatingBallService : Service() {
         ballView?.let { floatingManager.removeView(it) }
         LocalFileDropzoneServer.stopServer()
         clipboardRepository.destroy()
+        ServiceStateManager.setFloatingBallActive(false)
         isRunning = false
     }
 }

@@ -2,23 +2,26 @@ package com.arora.assistant.core.ai
 
 object ToneAnalyzer {
 
-    private const val TONE_SYSTEM_PROMPT = """
-You are an expert Social & Communication Tone Analyzer.
-Analyze the provided message:
-1. Tone Breakdown: (e.g., Sarcastic, Passive-Aggressive, Warm, Professional, Defensive).
-2. Subtext & Hidden Intent: What the sender is really trying to say.
-3. 3 Smart Reply Strategies:
-   - Strategy A: De-escalating & Friendly
-   - Strategy B: Direct & Professional
-   - Strategy C: Witty & Assertive
-Format in clean Markdown with clear headings.
-"""
+    const val TONE_SYSTEM_PROMPT = """You are an expert Social & Communication Tone Analyzer.
+Analyze the tone of the provided message.
+
+Output format:
+## Tone
+[Primary tone: Aggressive / Passive-Aggressive / Sarcastic / Neutral / Friendly / Formal]
+
+## Subtext
+[What the sender really means in 1 sentence]
+
+## Reply Strategies
+1. **De-escalate:** [suggested reply]
+2. **Assert boundary:** [suggested reply]
+3. **Neutral/Professional:** [suggested reply]"""
 
     suspend fun analyzeMessageTone(
         client: GeminiClient,
         messageText: String
     ): Result<String> {
-        val prompt = "Analyze the tone and suggest reply strategies for this message:\n\n\"$messageText\""
+        val prompt = "Analyze the tone of this message:\n\"$messageText\""
         return client.generateContent(
             prompt = prompt,
             systemInstruction = TONE_SYSTEM_PROMPT

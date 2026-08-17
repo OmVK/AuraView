@@ -77,41 +77,28 @@ fun FloatingClipboardView(
         matchesCategory && matchesSearch
     }
 
-    GlassCard(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(440.dp),
-        borderGlow = true
+            .fillMaxSize()
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        // Toolbar Strip
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("${entries.size} clips stored", color = Color.Gray, fontSize = 11.sp)
+
+            IconButton(
+                onClick = { repo.clearAllUnpinned() },
+                modifier = Modifier.size(28.dp)
             ) {
-                Icon(Icons.Default.ContentCopy, null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Smart Clipboard (${entries.size})",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    modifier = Modifier.weight(1f)
-                )
-
-                IconButton(
-                    onClick = { repo.clearAllUnpinned() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.ClearAll, "Clear Unpinned", tint = Color.Gray)
-                }
-
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = Color.White)
-                }
+                Icon(Icons.Default.ClearAll, "Clear Unpinned", tint = ElectricCyan, modifier = Modifier.size(16.dp))
             }
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
             // Search Bar
             OutlinedTextField(
@@ -217,6 +204,34 @@ fun FloatingClipboardView(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
+
+                                // Smart Action Chip
+                                val smartAction = remember(item.content) {
+                                    com.arora.assistant.core.ai.SmartClipboardAnalyzer.analyzeClip(context, item.content)
+                                }
+                                if (smartAction != null) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(ElectricCyan.copy(alpha = 0.2f))
+                                            .clickable {
+                                                try {
+                                                    context.startActivity(smartAction.actionIntent)
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "Cannot handle action", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "⚡ ${smartAction.title}",
+                                            color = ElectricCyan,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
                             }
 
                             // Pin Button
@@ -250,4 +265,3 @@ fun FloatingClipboardView(
             }
         }
     }
-}

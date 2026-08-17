@@ -4,15 +4,29 @@ import android.graphics.Bitmap
 
 object LectureNoteProcessor {
 
-    private const val LECTURE_SYSTEM_INSTRUCTION = """
-You are an expert AI Lecture Note Taker and Study Deck Creator.
-From the captured lecture slide/video frame or transcribed transcript:
-1. Generate structured Markdown study notes (Key concepts, formulas, definitions).
-2. Generate 3-5 Anki-ready Q&A Flashcard pairs formatted as:
-Q: [Question]
-A: [Answer]
----
-"""
+    const val ANKI_SYSTEM_PROMPT = """You are an expert AI Study Deck & Notes Creator.
+Convert the provided screen content or lecture frame into structured study notes and flashcards.
+
+Output format:
+## Topic: [detected topic]
+### Key Concepts
+- [concept 1]
+- [concept 2]
+
+### Anki Flashcards
+Q: [question 1]
+A: [answer 1]
+
+Q: [question 2]
+A: [answer 2]
+
+Q: [question 3]
+A: [answer 3]
+
+RULES:
+- Generate minimum 3 flashcard pairs.
+- Keep answers under 20 words.
+- Format cleanly in Markdown."""
 
     suspend fun processLectureFrame(
         client: GeminiClient,
@@ -20,15 +34,17 @@ A: [Answer]
         transcriptChunk: String?
     ): Result<String> {
         val prompt = buildString {
-            append("Create comprehensive study notes and Anki flashcards for this lecture content.")
+            append("Convert this screen content into structured study notes and Anki flashcards:\n\n")
             if (!transcriptChunk.isNullOrEmpty()) {
-                append("\n\nLecture Audio Transcript:\n").append(transcriptChunk)
+                append("Content: ").append(transcriptChunk)
+            } else {
+                append("Content: [See attached image]")
             }
         }
         return client.generateContent(
             prompt = prompt,
             bitmap = bitmap,
-            systemInstruction = LECTURE_SYSTEM_INSTRUCTION
+            systemInstruction = ANKI_SYSTEM_PROMPT
         )
     }
 }

@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -149,12 +150,14 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
     val savedApiKey by appPreferences.geminiApiKey.collectAsState(initial = "")
     var apiKeyInput by remember(savedApiKey) { mutableStateOf(savedApiKey) }
 
+    // StateFlow Service States
+    val isAccessibilityActive by com.arora.assistant.core.service.ServiceStateManager.isAccessibilityActive.collectAsState()
+    val isScreenSnipReady by com.arora.assistant.core.service.ServiceStateManager.isMediaProjectionActive.collectAsState()
+
     // Live Auto-Refreshing Permission States on Resume
     var hasOverlayPermission by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var isAccessibilityActive by remember { mutableStateOf(AroraAccessibilityService.isRunning()) }
     var isBatteryOptimized by remember { mutableStateOf(OemPermissionHelper.isIgnoringBatteryOptimizations(context)) }
     var isShizukuReady by remember { mutableStateOf(ShizukuBypassService.hasShizukuPermission()) }
-    var isScreenSnipReady by remember { mutableStateOf(MediaProjectionService.instance != null) }
 
     // Gemini API Test State
     var isTestingKey by remember { mutableStateOf(false) }
@@ -168,10 +171,8 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasOverlayPermission = Settings.canDrawOverlays(context)
-                isAccessibilityActive = AroraAccessibilityService.isRunning()
                 isBatteryOptimized = OemPermissionHelper.isIgnoringBatteryOptimizations(context)
                 isShizukuReady = ShizukuBypassService.hasShizukuPermission()
-                isScreenSnipReady = MediaProjectionService.instance != null
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -189,7 +190,6 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
                 putExtra(MediaProjectionService.EXTRA_RESULT_DATA, result.data)
             }
             ContextCompat.startForegroundService(context, intent)
-            isScreenSnipReady = true
             Toast.makeText(context, "Screen Snip Service Activated", Toast.LENGTH_SHORT).show()
         }
     }

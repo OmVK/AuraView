@@ -20,6 +20,31 @@ object AiMacroRecorder {
     private var isRecording = false
     private val gson = Gson()
 
+    const val MACRO_SYNTHESIS_PROMPT = """You observed a user perform a sequence of actions on their Android phone.
+Generalize these actions into a reusable automation macro.
+
+Rules:
+- Replace hardcoded values with {{parameter}} placeholders where the user would want to change them
+- Add reasonable delay_ms between steps (min 200ms)
+- If the same action repeats, consolidate into a loop parameter
+
+Output a JSON macro definition:
+{
+  "macro_name": "[short descriptive name]",
+  "description": "[what this macro does]",
+  "parameters": [
+    {"name": "[param_name]", "description": "[what to substitute]", "example": "[example value]"}
+  ],
+  "steps": [
+    {
+      "action": "CLICK" | "INPUT" | "SCROLL_DOWN" | "SCROLL_UP" | "BACK" | "WAIT",
+      "target_text": "[node text or {{param_name}} for variable parts]",
+      "input_value": "[text or {{param_name}}]",
+      "delay_ms": 300
+    }
+  ]
+}"""
+
     fun startRecording() {
         recordedEvents.clear()
         isRecording = true
@@ -45,24 +70,12 @@ object AiMacroRecorder {
         }
 
         val eventLog = gson.toJson(recordedEvents)
-        val prompt = """
-You are an expert Automation Script Synthesizer.
-The user demonstrated the following task: "$taskName"
-Raw Event Log:
+        val prompt = """$MACRO_SYNTHESIS_PROMPT
+
+Recorded actions:
 $eventLog
 
-Generalize and compile this demonstration into a clean workflow plan.
-Output a JSON with:
-{
-  "title": "$taskName",
-  "trigger": "Gesture / User Trigger",
-  "steps": [
-    {"command": "Click: " + targetText},
-    {"command": "Delay: 500ms"}
-  ]
-}
-Output only JSON.
-"""
+User's description of what they were doing: "$taskName""""
 
         val result = client.generateContent(prompt)
         if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
