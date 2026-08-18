@@ -214,28 +214,49 @@ object LocalFileDropzoneServer {
                 }
 
                 // Authentication Check (PIN Login & Session Cookie)
-                val isAuthenticated = cookieHeader.contains("arora_session=$authToken") || path.contains("pin=$pairingPin")
+                val isAuthenticated = (cookieHeader.isNotBlank() && cookieHeader.contains("arora_session=$authToken")) ||
+                        (path.contains("pin=$pairingPin") && pairingPin.isNotBlank())
 
                 // Handle PIN Authentication Submission: POST /auth
                 if (method.equals("POST", ignoreCase = true) && path.startsWith("/auth")) {
-                    val bodyBytes = ByteArray(contentLength)
-                    var read = 0
-                    while (read < contentLength) {
-                        val r = inStream.read(bodyBytes, read, contentLength - read)
-                        if (r == -1) break
-                        read += r
+                    val charBuffer = CharArray(contentLength.coerceAtLeast(1))
+                    var charsRead = 0
+                    while (charsRead < contentLength) {
+                        val count = reader.read(charBuffer, charsRead, contentLength - charsRead)
+                        if (count == -1) break
+                        charsRead += count
                     }
-                    val submittedPin = String(bodyBytes).substringAfter("pin=").trim()
-                    if (submittedPin == pairingPin) {
-                        val respHtml = "<script>document.cookie='arora_session=$authToken; path=/'; window.location.href='/';</script>"
+                    val bodyString = if (charsRead > 0) String(charBuffer, 0, charsRead) else ""
+
+                    val urlPin = if (path.contains("pin=")) URLDecoder.decode(path.substringAfter("pin=").substringBefore("&"), "UTF-8").trim() else ""
+                    val formPin = if (bodyString.contains("pin=")) URLDecoder.decode(bodyString.substringAfter("pin=").substringBefore("&"), "UTF-8").trim() else bodyString.trim()
+                    val submittedPin = if (urlPin.isNotBlank()) urlPin else formPin
+
+                    if (submittedPin.isNotBlank() && submittedPin == pairingPin) {
+                        val respHtml = """
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="UTF-8">
+                                <meta http-equiv="refresh" content="0; url=/">
+                                <script>
+                                    document.cookie = "arora_session=$authToken; path=/; max-age=86400; SameSite=Lax";
+                                    window.location.replace('/');
+                                </script>
+                            </head>
+                            <body style="background:#0E0E12;color:#38BDF8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
+                                <p style="font-size:18px;font-weight:bold;">✓ Unlocked! Redirecting to Dropzone...</p>
+                            </body>
+                            </html>
+                        """.trimIndent()
                         val response = "HTTP/1.1 200 OK\r\n" +
-                                "Set-Cookie: arora_session=$authToken; Path=/; HttpOnly\r\n" +
+                                "Set-Cookie: arora_session=$authToken; Path=/; Max-Age=86400; SameSite=Lax\r\n" +
                                 "Content-Type: text/html\r\n" +
                                 "Content-Length: ${respHtml.toByteArray().size}\r\n" +
                                 "Connection: close\r\n\r\n" + respHtml
                         output.write(response.toByteArray())
                     } else {
-                        val errHtml = renderPinLoginHtml("Invalid 6-digit PIN. Please check your phone screen.")
+                        val errHtml = renderPinLoginHtml("Invalid 6-digit PIN. Please check the PIN on your phone screen.")
                         val response = "HTTP/1.1 401 Unauthorized\r\n" +
                                 "Content-Type: text/html\r\n" +
                                 "Content-Length: ${errHtml.toByteArray().size}\r\n" +
@@ -599,8 +620,8 @@ object LocalFileDropzoneServer {
 
     private fun renderPinLoginHtml(errorMessage: String? = null): String {
         val errorBadge = if (errorMessage != null) {
-            "<p style='color: #F87171; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 8px; margin-bottom: 16px; font-size: 12px; font-weight: bold;'>$errorMessage</p>"
-        } else ""
+            "<p id='errorMsg' style='color: #F87171; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 8px; margin-bottom: 16px; font-size: 12px; font-weight: bold;'>$errorMessage</p>"
+        } else "<p id='errorMsg' style='display:none; color: #F87171; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: 8px; padding: 8px; margin-bottom: 16px; font-size: 12px; font-weight: bold;'></p>"
 
         return """
         <!DOCTYPE html>
@@ -616,7 +637,8 @@ object LocalFileDropzoneServer {
                 .logo { font-size: 24px; font-weight: 800; background: linear-gradient(135deg, #38BDF8, #A78BFA); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
                 input { width: 100%; padding: 14px; font-size: 20px; letter-spacing: 6px; text-align: center; font-weight: bold; background: #0E0E12; border: 1px solid #373B4E; border-radius: 12px; color: #38BDF8; margin-bottom: 16px; outline: none; }
                 input:focus { border-color: #38BDF8; box-shadow: 0 0 15px rgba(56, 189, 248, 0.3); }
-                button { width: 100%; padding: 14px; background: linear-gradient(135deg, #38BDF8, #A78BFA); border: none; border-radius: 12px; color: #0E0E12; font-size: 14px; font-weight: bold; cursor: pointer; }
+                button { width: 100%; padding: 14px; background: linear-gradient(135deg, #38BDF8, #A78BFA); border: none; border-radius: 12px; color: #0E0E12; font-size: 14px; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+                button:disabled { opacity: 0.6; cursor: not-allowed; }
             </style>
         </head>
         <body>
@@ -624,11 +646,45 @@ object LocalFileDropzoneServer {
                 <div class="logo">🔒 AuraView Wi-Fi Dropzone</div>
                 <p style="color: #94A3B8; font-size: 13px; margin-bottom: 20px;">Enter the 6-digit PIN displayed on your phone to connect.</p>
                 $errorBadge
-                <form action="/auth" method="POST">
-                    <input type="text" name="pin" maxlength="6" placeholder="••••••" autofocus required>
-                    <button type="submit">Unlock Secure Dropzone</button>
+                <form id="authForm" action="/auth" method="POST" onsubmit="submitPin(event)">
+                    <input type="text" id="pinInput" name="pin" maxlength="6" pattern="[0-9]{6}" placeholder="••••••" autofocus required autocomplete="off">
+                    <button type="submit" id="submitBtn">Unlock Secure Dropzone</button>
                 </form>
             </div>
+            <script>
+                function submitPin(e) {
+                    e.preventDefault();
+                    const pin = document.getElementById('pinInput').value.trim();
+                    if (pin.length !== 6) return;
+
+                    const btn = document.getElementById('submitBtn');
+                    const err = document.getElementById('errorMsg');
+                    btn.disabled = true;
+                    btn.innerText = 'Verifying PIN...';
+                    err.style.display = 'none';
+
+                    fetch('/auth', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'pin=' + encodeURIComponent(pin)
+                    }).then(res => {
+                        if (res.ok) {
+                            btn.innerText = '✓ Success! Loading Dropzone...';
+                            document.cookie = 'arora_session=' + '$authToken' + '; path=/; max-age=86400; SameSite=Lax';
+                            setTimeout(() => { window.location.href = '/?pin=' + encodeURIComponent(pin); }, 300);
+                        } else {
+                            btn.disabled = false;
+                            btn.innerText = 'Unlock Secure Dropzone';
+                            err.innerText = 'Invalid 6-digit PIN. Please check the PIN on your phone screen.';
+                            err.style.display = 'block';
+                            document.getElementById('pinInput').select();
+                        }
+                    }).catch(() => {
+                        // Fallback to direct form submit
+                        document.getElementById('authForm').submit();
+                    });
+                }
+            </script>
         </body>
         </html>
         """.trimIndent()
@@ -781,6 +837,19 @@ fun FloatingWiFiDropzoneDialog(
     var allowDocuments by remember { mutableStateOf(LocalFileDropzoneServer.allowDocuments) }
     var allowAudio by remember { mutableStateOf(LocalFileDropzoneServer.allowAudio) }
     var allowInternalStorage by remember { mutableStateOf(LocalFileDropzoneServer.allowInternalStorage) }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (!LocalFileDropzoneServer.isRunning) {
+            val url = LocalFileDropzoneServer.startServer(context)
+            serverUrl = url
+            pairingPin = LocalFileDropzoneServer.pairingPin
+            isRunning = true
+        } else {
+            serverUrl = LocalFileDropzoneServer.serverUrl
+            pairingPin = LocalFileDropzoneServer.pairingPin
+            isRunning = true
+        }
+    }
 
     Column(
         modifier = Modifier

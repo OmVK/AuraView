@@ -133,6 +133,9 @@ fun FloatingInterviewCopilotView(
         apiKey = appPreferences.geminiApiKey.first()
     }
 
+    // Audio Manager to silence continuous speech recognition earcon beeps on Samsung devices (e.g. S24 Ultra)
+    val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }
+
     // Speech Recognizer Lifecycle
     val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
     val recognizerIntent = remember {
@@ -141,6 +144,10 @@ fun FloatingInterviewCopilotView(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra("android.speech.extra.DICTATION_MODE", true)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
     }
 
@@ -172,10 +179,15 @@ fun FloatingInterviewCopilotView(
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
                 if (isListening) {
-                    try {
-                        speechRecognizer.startListening(recognizerIntent)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    scope.launch {
+                        kotlinx.coroutines.delay(400)
+                        if (isListening) {
+                            try {
+                                speechRecognizer.startListening(recognizerIntent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
                     }
                 }
             }
@@ -189,10 +201,15 @@ fun FloatingInterviewCopilotView(
                     triggerUniversalAnswerGeneration(fullText)
                 }
                 if (isListening) {
-                    try {
-                        speechRecognizer.startListening(recognizerIntent)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    scope.launch {
+                        kotlinx.coroutines.delay(300)
+                        if (isListening) {
+                            try {
+                                speechRecognizer.startListening(recognizerIntent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
                     }
                 }
             }
@@ -213,6 +230,12 @@ fun FloatingInterviewCopilotView(
 
         speechRecognizer.setRecognitionListener(listener)
         onDispose {
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
+                    audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
+                }
+            } catch (e: Exception) {}
             speechRecognizer.destroy()
         }
     }
@@ -220,6 +243,10 @@ fun FloatingInterviewCopilotView(
     fun startListening() {
         isListening = true
         try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_MUTE, 0)
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_MUTE, 0)
+            }
             speechRecognizer.startListening(recognizerIntent)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -229,6 +256,10 @@ fun FloatingInterviewCopilotView(
     fun stopListening() {
         isListening = false
         try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
+            }
             speechRecognizer.stopListening()
         } catch (e: Exception) {
             e.printStackTrace()

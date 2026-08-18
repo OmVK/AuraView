@@ -153,8 +153,17 @@ fun FloatingLiveTranscriberView(
         groqApiKeyInput = appPreferences.groqApiKey.first()
     }
 
+    val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }
+
     fun stopListening() {
         isListening = false
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
+            }
+        } catch (e: Exception) {}
+
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.destroy()
@@ -174,10 +183,23 @@ fun FloatingLiveTranscriberView(
         mediaRecorder = null
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            stopListening()
+        }
+    }
+
     // Start Mode A: 100% Offline Neural Recognizer
     fun startOfflineListening() {
         stopListening()
         if (!SpeechRecognizer.isRecognitionAvailable(context)) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_MUTE, 0)
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_MUTE, 0)
+            } catch (e: Exception) {}
+        }
 
         val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
         speechRecognizer = recognizer
@@ -187,6 +209,10 @@ fun FloatingLiveTranscriberView(
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra("android.speech.extra.DICTATION_MODE", true)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
 
         recognizer.setRecognitionListener(object : RecognitionListener {
@@ -197,7 +223,12 @@ fun FloatingLiveTranscriberView(
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
                 if (isListening) {
-                    try { recognizer.startListening(intent) } catch (e: Exception) { e.printStackTrace() }
+                    scope.launch {
+                        delay(400)
+                        if (isListening) {
+                            try { recognizer.startListening(intent) } catch (e: Exception) { e.printStackTrace() }
+                        }
+                    }
                 }
             }
             override fun onResults(results: Bundle?) {
@@ -210,7 +241,12 @@ fun FloatingLiveTranscriberView(
                     }
                 }
                 if (isListening) {
-                    try { recognizer.startListening(intent) } catch (e: Exception) { e.printStackTrace() }
+                    scope.launch {
+                        delay(300)
+                        if (isListening) {
+                            try { recognizer.startListening(intent) } catch (e: Exception) { e.printStackTrace() }
+                        }
+                    }
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {
@@ -259,7 +295,7 @@ fun FloatingLiveTranscriberView(
                     recorder.prepare()
                     recorder.start()
 
-                    delay(2500)
+                    delay(4000)
 
                     try {
                         recorder.stop()

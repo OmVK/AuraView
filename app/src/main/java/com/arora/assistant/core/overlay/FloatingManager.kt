@@ -138,7 +138,8 @@ class FloatingManager(private val context: Context) {
         val initialX = ((screenWidth - windowWidthPx) / 2).coerceAtLeast(0)
         val initialY = initialYDp?.let { (it * displayMetrics.density).toInt() } ?: ((screenHeight - windowHeightPx) / 2).coerceAtLeast(0)
 
-        var windowFlags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+        var windowFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
@@ -184,6 +185,7 @@ class FloatingManager(private val context: Context) {
                             },
                             onMinimize = {
                                 isMinimized = true
+                                params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                 params.width = (64 * displayMetrics.density).toInt()
                                 params.height = (64 * displayMetrics.density).toInt()
                                 updateViewLayout(composeView, params)
@@ -205,6 +207,7 @@ class FloatingManager(private val context: Context) {
                             icon = icon,
                             onExpand = {
                                 isMinimized = false
+                                params.flags = windowFlags
                                 params.width = windowWidthPx
                                 params.height = windowHeightPx
                                 updateViewLayout(composeView, params)

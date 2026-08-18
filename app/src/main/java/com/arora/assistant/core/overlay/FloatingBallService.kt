@@ -341,7 +341,8 @@ class FloatingBallService : Service() {
         val params = FloatingManager.createLayoutParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
             height = WindowManager.LayoutParams.MATCH_PARENT,
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             gravity = Gravity.CENTER
         )
@@ -436,7 +437,8 @@ class FloatingBallService : Service() {
         val params = FloatingManager.createLayoutParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
             height = WindowManager.LayoutParams.MATCH_PARENT,
-            flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             gravity = Gravity.TOP or Gravity.START
         )
@@ -518,7 +520,8 @@ class FloatingBallService : Service() {
         val params = FloatingManager.createLayoutParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
             height = WindowManager.LayoutParams.WRAP_CONTENT,
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             gravity = Gravity.BOTTOM
         )
@@ -546,7 +549,8 @@ class FloatingBallService : Service() {
         val params = FloatingManager.createLayoutParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
             height = WindowManager.LayoutParams.WRAP_CONTENT,
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             gravity = Gravity.BOTTOM
         )
@@ -595,7 +599,9 @@ class FloatingBallService : Service() {
                 val params = FloatingManager.createLayoutParams(
                     width = WindowManager.LayoutParams.MATCH_PARENT,
                     height = WindowManager.LayoutParams.MATCH_PARENT,
-                    flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                    flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 )
 
                 inPlaceTranslateWindow = floatingManager.createFloatingComposeView(params) {
@@ -641,7 +647,8 @@ class FloatingBallService : Service() {
                 val params = FloatingManager.createLayoutParams(
                     width = WindowManager.LayoutParams.MATCH_PARENT,
                     height = WindowManager.LayoutParams.MATCH_PARENT,
-                    flags = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 )
@@ -674,7 +681,9 @@ class FloatingBallService : Service() {
             val params = FloatingManager.createLayoutParams(
                 width = WindowManager.LayoutParams.MATCH_PARENT,
                 height = WindowManager.LayoutParams.WRAP_CONTENT,
-                flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 gravity = Gravity.TOP or Gravity.START
             ).apply {
                 x = 0
