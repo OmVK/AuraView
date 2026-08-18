@@ -23,10 +23,23 @@ class GeminiClient(
 
     companion object {
         private const val TAG = "GeminiClient"
+
         @Volatile
         var defaultWorkingModel: String = "gemini-2.0-flash"
+
         @Volatile
         var defaultWorkingVersion: String = "v1beta"
+
+        val FALLBACK_MODELS = listOf(
+            "gemini-2.0-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro",
+            "gemini-pro"
+        )
 
         fun compressAndEncodeBitmap(bitmap: Bitmap): String {
             val maxDim = 1024
@@ -74,36 +87,27 @@ class GeminiClient(
             return@withContext Result.failure(Exception("API Key is empty. Please paste your key from Google AI Studio."))
         }
 
-        // Test with default high-speed model directly first
-        val testResult = executeDirectGenerate(
-            cleanKey = cleanKey,
-            version = defaultWorkingVersion,
-            modelName = defaultWorkingModel,
-            contentsArray = listOf(mapOf("parts" to listOf(mapOf("text" to "ping")))),
-            maxTokens = 5,
-            temperature = 0.1
-        )
+        for (candidate in FALLBACK_MODELS) {
+            for (ver in listOf("v1beta", "v1")) {
+                val testResult = tryDirectGenerate(
+                    cleanKey = cleanKey,
+                    version = ver,
+                    modelName = candidate,
+                    contentsArray = listOf(mapOf("parts" to listOf(mapOf("text" to "ping")))),
+                    maxTokens = 5,
+                    temperature = 0.1
+                )
 
-        if (testResult.isSuccess) {
-            return@withContext Result.success(defaultWorkingModel)
+                if (testResult.isSuccess) {
+                    defaultWorkingModel = candidate
+                    defaultWorkingVersion = ver
+                    Log.i(TAG, "Validated working model: $candidate on $ver")
+                    return@withContext Result.success(candidate)
+                }
+            }
         }
 
-        // Fallback to gemini-1.5-flash
-        val fallbackResult = executeDirectGenerate(
-            cleanKey = cleanKey,
-            version = "v1beta",
-            modelName = "gemini-1.5-flash",
-            contentsArray = listOf(mapOf("parts" to listOf(mapOf("text" to "ping")))),
-            maxTokens = 5,
-            temperature = 0.1
-        )
-
-        if (fallbackResult.isSuccess) {
-            defaultWorkingModel = "gemini-1.5-flash"
-            return@withContext Result.success("gemini-1.5-flash")
-        }
-
-        fallbackResult
+        Result.failure(Exception("Could not find a working Gemini model for your API key. Please check your key in Google AI Studio."))
     }
 
     suspend fun generateContent(
@@ -133,10 +137,8 @@ class GeminiClient(
         partsList.add(mapOf("text" to prompt))
         val contents = listOf(mapOf("parts" to partsList))
 
-        executeDirectGenerate(
+        executeAutoFallbackGenerate(
             cleanKey = cleanKey,
-            version = defaultWorkingVersion,
-            modelName = defaultWorkingModel,
             contentsArray = contents,
             systemInstruction = systemInstruction,
             maxTokens = maxTokens,
@@ -172,10 +174,8 @@ class GeminiClient(
         partsList.add(mapOf("text" to prompt))
         val contents = listOf(mapOf("parts" to partsList))
 
-        executeStreamGenerate(
+        executeAutoFallbackStream(
             cleanKey = cleanKey,
-            version = defaultWorkingVersion,
-            modelName = defaultWorkingModel,
             contentsArray = contents,
             systemInstruction = systemInstruction,
             maxTokens = maxTokens,
@@ -202,10 +202,8 @@ class GeminiClient(
             )
         }
 
-        executeDirectGenerate(
+        executeAutoFallbackGenerate(
             cleanKey = cleanKey,
-            version = defaultWorkingVersion,
-            modelName = defaultWorkingModel,
             contentsArray = contentsArray,
             systemInstruction = systemInstruction,
             maxTokens = maxTokens,
@@ -232,10 +230,8 @@ class GeminiClient(
             )
         }
 
-        executeStreamGenerate(
+        executeAutoFallbackStream(
             cleanKey = cleanKey,
-            version = defaultWorkingVersion,
-            modelName = defaultWorkingModel,
             contentsArray = contentsArray,
             systemInstruction = systemInstruction,
             maxTokens = maxTokens,
@@ -244,7 +240,92 @@ class GeminiClient(
         )
     }
 
-    private suspend fun executeStreamGenerate(
+    private suspend fun executeAutoFallbackStream(
+        cleanKey: String,
+        contentsArray: List<Map<String, Any>>,
+        systemInstruction: String? = null,
+        maxTokens: Int = 1200,
+        temperature: Double = 0.2,
+        onChunk: suspend (accumulatedText: String) -> Unit
+    ): Result<String> {
+        // Build candidate list with defaultWorkingModel first
+        val candidates = linkedSetOf<String>().apply {
+            add(defaultWorkingModel)
+            addAll(FALLBACK_MODELS)
+        }
+
+        var lastError = "Unknown error"
+
+        for (candidate in candidates) {
+            val result = tryStreamGenerate(
+                cleanKey = cleanKey,
+                version = defaultWorkingVersion,
+                modelName = candidate,
+                contentsArray = contentsArray,
+                systemInstruction = systemInstruction,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                onChunk = onChunk
+            )
+
+            if (result.isSuccess) {
+                defaultWorkingModel = candidate
+                return result
+            } else {
+                val err = result.exceptionOrNull()?.message ?: ""
+                lastError = err
+                // If error is 404/not found, try next candidate
+                if (!err.contains("404") && !err.contains("not found", ignoreCase = true) && !err.contains("models/")) {
+                    // Non-model error (e.g. invalid API key), return immediately
+                    return result
+                }
+            }
+        }
+
+        return Result.failure(Exception(lastError))
+    }
+
+    private fun executeAutoFallbackGenerate(
+        cleanKey: String,
+        contentsArray: List<Map<String, Any>>,
+        systemInstruction: String? = null,
+        maxTokens: Int = 1200,
+        temperature: Double = 0.2
+    ): Result<String> {
+        val candidates = linkedSetOf<String>().apply {
+            add(defaultWorkingModel)
+            addAll(FALLBACK_MODELS)
+        }
+
+        var lastError = "Unknown error"
+
+        for (candidate in candidates) {
+            val result = tryDirectGenerate(
+                cleanKey = cleanKey,
+                version = defaultWorkingVersion,
+                modelName = candidate,
+                contentsArray = contentsArray,
+                systemInstruction = systemInstruction,
+                maxTokens = maxTokens,
+                temperature = temperature
+            )
+
+            if (result.isSuccess) {
+                defaultWorkingModel = candidate
+                return result
+            } else {
+                val err = result.exceptionOrNull()?.message ?: ""
+                lastError = err
+                if (!err.contains("404") && !err.contains("not found", ignoreCase = true) && !err.contains("models/")) {
+                    return result
+                }
+            }
+        }
+
+        return Result.failure(Exception(lastError))
+    }
+
+    private suspend fun tryStreamGenerate(
         cleanKey: String,
         version: String,
         modelName: String,
@@ -275,20 +356,12 @@ class GeminiClient(
         }
 
         val requestBody = gson.toJson(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(requestBody)
-            .build()
+        val request = Request.Builder().url(url).post(requestBody).build()
 
-        try {
+        return try {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string()
-                // Fast fallback if 2.0-flash has regional or tier issue
-                if (cleanModel == "gemini-2.0-flash") {
-                    defaultWorkingModel = "gemini-1.5-flash"
-                    return executeStreamGenerate(cleanKey, version, "gemini-1.5-flash", contentsArray, systemInstruction, maxTokens, temperature, onChunk)
-                }
                 return Result.failure(Exception(extractErrorMessage(response.code, errorBody)))
             }
 
@@ -327,18 +400,13 @@ class GeminiClient(
                     }
                 }
             }
-            val finalResult = accumulated.toString().trim()
-            return Result.success(finalResult)
+            Result.success(accumulated.toString().trim())
         } catch (e: Exception) {
-            if (cleanModel == "gemini-2.0-flash") {
-                defaultWorkingModel = "gemini-1.5-flash"
-                return executeStreamGenerate(cleanKey, version, "gemini-1.5-flash", contentsArray, systemInstruction, maxTokens, temperature, onChunk)
-            }
-            return Result.failure(e)
+            Result.failure(e)
         }
     }
 
-    private fun executeDirectGenerate(
+    private fun tryDirectGenerate(
         cleanKey: String,
         version: String,
         modelName: String,
@@ -348,32 +416,29 @@ class GeminiClient(
         temperature: Double = 0.2
     ): Result<String> {
         val cleanModel = modelName.removePrefix("models/").trim()
-        try {
-            val url = "https://generativelanguage.googleapis.com/$version/models/$cleanModel:generateContent?key=$cleanKey"
+        val url = "https://generativelanguage.googleapis.com/$version/models/$cleanModel:generateContent?key=$cleanKey"
 
-            val genConfig = mutableMapOf<String, Any>(
-                "maxOutputTokens" to maxTokens,
-                "temperature" to temperature,
-                "topP" to 0.8
+        val genConfig = mutableMapOf<String, Any>(
+            "maxOutputTokens" to maxTokens,
+            "temperature" to temperature,
+            "topP" to 0.8
+        )
+
+        val payload = mutableMapOf<String, Any>(
+            "contents" to contentsArray,
+            "generationConfig" to genConfig
+        )
+
+        if (!systemInstruction.isNullOrEmpty()) {
+            payload["systemInstruction"] = mapOf(
+                "parts" to listOf(mapOf("text" to systemInstruction))
             )
+        }
 
-            val payload = mutableMapOf<String, Any>(
-                "contents" to contentsArray,
-                "generationConfig" to genConfig
-            )
+        val requestBody = gson.toJson(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val request = Request.Builder().url(url).post(requestBody).build()
 
-            if (!systemInstruction.isNullOrEmpty()) {
-                payload["systemInstruction"] = mapOf(
-                    "parts" to listOf(mapOf("text" to systemInstruction))
-                )
-            }
-
-            val requestBody = gson.toJson(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .build()
-
+        return try {
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string()
 
@@ -407,20 +472,10 @@ class GeminiClient(
                 }
             }
 
-            // Fallback to gemini-1.5-flash if 2.0-flash is unavailable
-            if (cleanModel == "gemini-2.0-flash") {
-                defaultWorkingModel = "gemini-1.5-flash"
-                return executeDirectGenerate(cleanKey, version, "gemini-1.5-flash", contentsArray, systemInstruction, maxTokens, temperature)
-            }
-
             val errorMsg = extractErrorMessage(response.code, responseBody)
-            return Result.failure(Exception(errorMsg))
+            Result.failure(Exception(errorMsg))
         } catch (e: Exception) {
-            if (cleanModel == "gemini-2.0-flash") {
-                defaultWorkingModel = "gemini-1.5-flash"
-                return executeDirectGenerate(cleanKey, version, "gemini-1.5-flash", contentsArray, systemInstruction, maxTokens, temperature)
-            }
-            return Result.failure(e)
+            Result.failure(e)
         }
     }
 
