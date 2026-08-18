@@ -134,13 +134,60 @@ class ChatSessionManager(
         val result = client.generateChat(
             messages = currentMessages,
             systemInstruction = systemInstruction,
-            maxTokens = 2500,
+            maxTokens = 800,
             temperature = 0.3
         )
 
         if (result.isSuccess) {
             val rawAnswer = result.getOrNull() ?: ""
             val cleanAnswer = sanitizeResponse(rawAnswer)
+            conversationHistory.add(ChatMessage("user", cleanQuestion))
+            conversationHistory.add(ChatMessage("model", cleanAnswer))
+            Result.success(cleanAnswer)
+        } else {
+            result
+        }
+    }
+
+    suspend fun sendMessageStream(
+        userMessage: String,
+        bitmap: Bitmap? = null,
+        forceProModel: Boolean = false,
+        onChunk: suspend (String) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val client = GeminiClient(
+            apiKey = apiKey,
+            model = if (forceProModel) "gemini-1.5-pro" else defaultModel
+        )
+
+        val cleanQuestion = userMessage.trim()
+
+        val systemInstruction = buildString {
+            append("You are the candidate sitting in a live job interview or viva exam. ")
+            append("Always answer the question directly, professionally, and naturally in 1-2 spoken paragraphs in the first person ('I'). ")
+            append("Never output bulleted thinking steps, options, tips, coaching advice, markdown headers, or meta commentary. ")
+            append("Provide only the exact spoken answer you would say out loud right now.")
+            if (contextInfo.isNotBlank()) {
+                append("\nTarget Company / Role / Subject Context: ${contextInfo.trim()}")
+            }
+        }
+
+        val currentMessages = conversationHistory.toMutableList()
+        currentMessages.add(ChatMessage("user", cleanQuestion))
+
+        val result = client.streamGenerateChat(
+            messages = currentMessages,
+            systemInstruction = systemInstruction,
+            maxTokens = 800,
+            temperature = 0.3,
+            onChunk = { partial ->
+                val clean = sanitizeResponse(partial)
+                onChunk(clean)
+            }
+        )
+
+        if (result.isSuccess) {
+            val cleanAnswer = sanitizeResponse(result.getOrNull() ?: "")
             conversationHistory.add(ChatMessage("user", cleanQuestion))
             conversationHistory.add(ChatMessage("model", cleanAnswer))
             Result.success(cleanAnswer)

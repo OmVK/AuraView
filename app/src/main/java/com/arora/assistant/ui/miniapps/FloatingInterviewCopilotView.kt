@@ -160,13 +160,19 @@ fun FloatingInterviewCopilotView(
 
         scope.launch {
             isGenerating = true
+            generatedAnswer = ""
             val manager = sessionManager ?: ChatSessionManager(apiKey)
             manager.contextInfo = contextInfo
-            val result = manager.sendMessage(
-                userMessage = promptQuestion.trim()
+            val result = manager.sendMessageStream(
+                userMessage = promptQuestion.trim(),
+                onChunk = { partial ->
+                    generatedAnswer = partial
+                }
             )
             isGenerating = false
-            generatedAnswer = result.getOrElse { "Error: ${it.message}" }
+            if (result.isFailure) {
+                generatedAnswer = "Error: ${result.exceptionOrNull()?.message}"
+            }
         }
     }
 

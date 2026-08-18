@@ -135,6 +135,8 @@ fun CircleToSearchResultSheet(
         if (userQuery.isBlank() || geminiClient == null) return
         val q = userQuery.trim()
         chatMessages.add(ChatMessage("user", q))
+        chatMessages.add(ChatMessage("model", "⏳ Processing..."))
+        val modelMsgIndex = chatMessages.size - 1
         isQueryingAi = true
 
         scope.launch {
@@ -163,15 +165,23 @@ fun CircleToSearchResultSheet(
             }
 
             val targetBitmap = if (isVisualMode) bitmap else null
-            val result = geminiClient.generateContent(
+            val result = geminiClient.streamGenerate(
                 prompt = prompt,
                 bitmap = targetBitmap,
-                maxTokens = 2500
+                maxTokens = 1200,
+                onChunk = { partial ->
+                    val clean = ProblemSolverEngine.cleanMathFormatting(partial)
+                    if (modelMsgIndex < chatMessages.size) {
+                        chatMessages[modelMsgIndex] = ChatMessage("model", clean)
+                    }
+                }
             )
             isQueryingAi = false
-            val rawAnswer = result.getOrElse { "Error: ${it.message}" }
-            val cleanAnswer = ProblemSolverEngine.cleanMathFormatting(rawAnswer)
-            chatMessages.add(ChatMessage("model", cleanAnswer))
+            if (result.isFailure) {
+                if (modelMsgIndex < chatMessages.size) {
+                    chatMessages[modelMsgIndex] = ChatMessage("model", "Error: ${result.exceptionOrNull()?.message}")
+                }
+            }
         }
     }
 
@@ -179,6 +189,9 @@ fun CircleToSearchResultSheet(
     LaunchedEffect(geminiClient) {
         if (geminiClient != null && chatMessages.isEmpty()) {
             isQueryingAi = true
+            chatMessages.add(ChatMessage("model", "⚡ Analyzing with Gemini 2.0 Flash..."))
+            val modelMsgIndex = 0
+
             val initialPrompt = if (isVisualMode) {
                 if (ocrText.isNotBlank()) {
                     "Analyze this circled image and context. If it contains a math equation or formula, solve it and state the **Final Answer** directly at the top with clean math symbols and no LaTeX dollar signs ($ or $$). If it contains a product, object, or code, identify and explain it concisely."
@@ -194,10 +207,23 @@ fun CircleToSearchResultSheet(
             }
 
             val targetBitmap = if (isVisualMode) bitmap else null
-            val res = geminiClient.generateContent(initialPrompt, bitmap = targetBitmap, maxTokens = 2500)
+            val res = geminiClient.streamGenerate(
+                prompt = initialPrompt,
+                bitmap = targetBitmap,
+                maxTokens = 1200,
+                onChunk = { partial ->
+                    val clean = ProblemSolverEngine.cleanMathFormatting(partial)
+                    if (modelMsgIndex < chatMessages.size) {
+                        chatMessages[modelMsgIndex] = ChatMessage("model", clean)
+                    }
+                }
+            )
             isQueryingAi = false
-            val clean = ProblemSolverEngine.cleanMathFormatting(res.getOrElse { "Error: ${it.message}" })
-            chatMessages.add(ChatMessage("model", clean))
+            if (res.isFailure) {
+                if (modelMsgIndex < chatMessages.size) {
+                    chatMessages[modelMsgIndex] = ChatMessage("model", "Error: ${res.exceptionOrNull()?.message}")
+                }
+            }
         }
     }
 
