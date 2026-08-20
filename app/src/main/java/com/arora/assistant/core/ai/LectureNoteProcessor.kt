@@ -29,9 +29,10 @@ RULES:
 - Format cleanly in Markdown."""
 
     suspend fun processLectureFrame(
-        client: GeminiClient,
-        bitmap: Bitmap?,
-        transcriptChunk: String?
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
+        bitmap: Bitmap? = null,
+        transcriptChunk: String? = null
     ): Result<String> {
         val prompt = buildString {
             append("Convert this screen content into structured study notes and Anki flashcards:\n\n")
@@ -41,10 +42,26 @@ RULES:
                 append("Content: [See attached image]")
             }
         }
-        return client.generateContent(
-            prompt = prompt,
-            bitmap = bitmap,
-            systemInstruction = ANKI_SYSTEM_PROMPT
-        )
+
+        if (groqClient != null) {
+            val res = groqClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmap,
+                systemInstruction = ANKI_SYSTEM_PROMPT
+            )
+            if (res.isSuccess && !res.getOrNull().isNullOrBlank()) {
+                return res
+            }
+        }
+
+        if (geminiClient != null) {
+            return geminiClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmap,
+                systemInstruction = ANKI_SYSTEM_PROMPT
+            )
+        }
+
+        return Result.failure(Exception("No AI client configured for note processing"))
     }
 }

@@ -16,4 +16,5 @@ captures/
 .env
 .env.*
 PROJECT_AUDIT.md
+prompt.md
 *.apk

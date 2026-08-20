@@ -79,6 +79,7 @@ import com.arora.assistant.AroraApplication
 import com.arora.assistant.R
 import com.arora.assistant.core.ai.FloatingGraphPlotterView
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.ai.OfflineOcrEngine
 import com.arora.assistant.core.ai.OfflineTranslationEngine
 import com.arora.assistant.core.ai.ProblemSolverEngine
@@ -544,7 +545,9 @@ class FloatingBallService : Service() {
     private fun openCircleResultSheet(bitmap: Bitmap?, ocrText: String, isVisualMode: Boolean) {
         dismissActiveWindow()
 
-        var clientInstance by mutableStateOf<GeminiClient?>(null)
+        var geminiInstance by mutableStateOf<GeminiClient?>(null)
+        var groqInstance by mutableStateOf<GroqClient?>(null)
+        var activeEngine by mutableStateOf("groq")
 
         val params = FloatingManager.createLayoutParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
@@ -553,22 +556,31 @@ class FloatingBallService : Service() {
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             gravity = Gravity.BOTTOM
-        )
+        ).apply {
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
 
         activeOverlayWindow = floatingManager.createFloatingComposeView(params) {
             CircleToSearchResultSheet(
                 bitmap = bitmap,
                 ocrText = ocrText,
                 initialIsVisualMode = isVisualMode,
-                geminiClient = clientInstance,
+                geminiClient = geminiInstance,
+                groqClient = groqInstance,
+                activeEngine = activeEngine,
                 onClose = { dismissActiveWindow() }
             )
         }
 
         serviceScope.launch {
-            val apiKey = appPreferences.geminiApiKey.first()
-            if (apiKey.isNotEmpty()) {
-                clientInstance = GeminiClient(apiKey)
+            activeEngine = appPreferences.preferredAiEngine.first()
+            val geminiKey = appPreferences.geminiApiKey.first()
+            if (geminiKey.isNotEmpty()) {
+                geminiInstance = GeminiClient(geminiKey)
+            }
+            val groqKey = appPreferences.groqApiKey.first()
+            if (groqKey.isNotEmpty()) {
+                groqInstance = GroqClient(groqKey)
             }
         }
     }
@@ -583,13 +595,20 @@ class FloatingBallService : Service() {
                 val blocks = mutableListOf<TranslatedBlock>()
 
                 val apiKey = appPreferences.geminiApiKey.first()
+                val groqKey = appPreferences.groqApiKey.first()
                 val geminiClient = if (apiKey.isNotBlank()) GeminiClient(apiKey) else null
+                val groqClient = if (groqKey.isNotBlank()) GroqClient(groqKey) else null
 
                 for (line in ocrResult.lines) {
                     val original = line.text
                     var translated = com.arora.assistant.core.ai.OfflineTranslationEngine.translateOnDevice(original, "Hindi").getOrNull()
-                    if (translated == null && geminiClient != null) {
-                        translated = com.arora.assistant.core.ai.InPlaceTranslator.translateContent(geminiClient, original, "Hindi").getOrNull()
+                    if (translated == null && (groqClient != null || geminiClient != null)) {
+                        translated = com.arora.assistant.core.ai.InPlaceTranslator.translateContent(
+                            geminiClient = geminiClient,
+                            groqClient = groqClient,
+                            text = original,
+                            targetLanguage = "Hindi"
+                        ).getOrNull()
                     }
                     val finalTranslation = translated ?: original
                     val box = line.boundingBox ?: Rect(0, 0, 100, 40)
@@ -722,8 +741,8 @@ class FloatingBallService : Service() {
         activeOverlayWindow = floatingManager.createDraggableSubWindow(
             title = "AI Interview & Exam Copilot",
             icon = Icons.Default.AutoAwesome,
-            widthDp = 340,
-            heightDp = 460,
+            widthDp = 360,
+            heightDp = 530,
             isSecure = true,
             initialYDp = 48,
             onBackToMenu = { dismissActiveWindow(); openFloatingActionHub() },

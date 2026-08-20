@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityNodeInfo
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.service.ServiceStateManager
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
@@ -200,7 +201,8 @@ object UiActionExecutor {
 
     suspend fun executeGoalOnScreen(
         context: Context,
-        client: GeminiClient?,
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
         goal: String,
         onProgress: (String) -> Unit = {}
     ): Result<String> = withContext(Dispatchers.Main) {
@@ -218,9 +220,9 @@ object UiActionExecutor {
             return@withContext Result.failure(Exception("Accessibility Service is not enabled or screen is inaccessible."))
         }
 
-        // Step 3: If Gemini client is available, run multimodal visual reasoning
-        if (client == null) {
-            return@withContext Result.failure(Exception("Command not recognized as instant action. Configure Gemini API key for complex UI planning."))
+        // Step 3: Check AI client availability
+        if (groqClient == null && geminiClient == null) {
+            return@withContext Result.failure(Exception("Command not recognized as instant action. Configure Groq or Gemini API key for complex UI planning."))
         }
 
         onProgress("Analyzing UI layout and nodes with AI...")
@@ -232,10 +234,27 @@ object UiActionExecutor {
 Schema: {"action": "CLICK"|"INPUT"|"SCROLL_DOWN"|"BACK"|"DONE", "target_text": "text", "input_value": "val", "reasoning": "why"}
 Screen nodes: $elementsJson"""
 
-        val result = client.generateContent(prompt)
-        if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+        var responseText: String? = null
 
-        val responseText = result.getOrNull()?.trim() ?: "{}"
+        // 1. Try Groq LPU first
+        if (groqClient != null) {
+            val groqRes = groqClient.generateContent(prompt)
+            if (groqRes.isSuccess && !groqRes.getOrNull().isNullOrBlank()) {
+                responseText = groqRes.getOrNull()?.trim()
+            }
+        }
+
+        // 2. Fallback to Gemini
+        if (responseText == null && geminiClient != null) {
+            val result = geminiClient.generateContent(prompt)
+            if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+            responseText = result.getOrNull()?.trim()
+        }
+
+        if (responseText.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("Empty response from AI Agent planner."))
+        }
+
         val jsonCleaned = responseText.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
 
         try {

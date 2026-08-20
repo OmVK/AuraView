@@ -65,6 +65,7 @@ import com.arora.assistant.core.agent.MacroRecorderEngine
 import com.arora.assistant.core.agent.SavedMacro
 import com.arora.assistant.core.agent.UiActionExecutor
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.data.AppPreferences
 import com.arora.assistant.ui.components.NeonButton
 import com.arora.assistant.ui.theme.NeonEmerald
@@ -94,6 +95,7 @@ fun FloatingAiAgentView(
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Commands & Control, 1: Custom Macros
 
     var apiKey by remember { mutableStateOf("") }
+    var groqApiKey by remember { mutableStateOf("") }
     var commandInput by remember { mutableStateOf("") }
     var isExecuting by remember { mutableStateOf(false) }
     var executionStatus by remember { mutableStateOf<String?>(null) }
@@ -106,6 +108,7 @@ fun FloatingAiAgentView(
 
     LaunchedEffect(Unit) {
         apiKey = appPreferences.geminiApiKey.first()
+        groqApiKey = appPreferences.groqApiKey.first()
         MacroRecorderEngine.init(context)
     }
 
@@ -187,11 +190,17 @@ fun FloatingAiAgentView(
                             return@launch
                         }
 
-                        // 2. Fallback to Screen Node Execution
+                        // 2. Fallback to Screen Node Execution with Groq / Gemini
                         isExecuting = true
                         executionStatus = "Analyzing screen..."
-                        val client = if (apiKey.isNotBlank()) GeminiClient(apiKey) else null
-                        val res = UiActionExecutor.executeGoalOnScreen(context, client, trimmed) {
+                        val geminiClient = if (apiKey.isNotBlank()) GeminiClient(apiKey) else null
+                        val groqClient = if (groqApiKey.isNotBlank()) GroqClient(groqApiKey) else null
+                        val res = UiActionExecutor.executeGoalOnScreen(
+                            context = context,
+                            geminiClient = geminiClient,
+                            groqClient = groqClient,
+                            goal = trimmed
+                        ) {
                             executionStatus = it
                         }
                         isExecuting = false

@@ -82,6 +82,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.bypass.AroraAccessibilityService
 import com.arora.assistant.core.bypass.MediaProjectionService
 import com.arora.assistant.core.bypass.OemPermissionHelper
@@ -150,6 +151,11 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
     val savedApiKey by appPreferences.geminiApiKey.collectAsState(initial = "")
     var apiKeyInput by remember(savedApiKey) { mutableStateOf(savedApiKey) }
 
+    val savedGroqKey by appPreferences.groqApiKey.collectAsState(initial = "")
+    var groqKeyInput by remember(savedGroqKey) { mutableStateOf(savedGroqKey) }
+
+    val activeAiEngine by appPreferences.preferredAiEngine.collectAsState(initial = "groq")
+
     // StateFlow Service States
     val isAccessibilityActive by com.arora.assistant.core.service.ServiceStateManager.isAccessibilityActive.collectAsState()
     val isScreenSnipReady by com.arora.assistant.core.service.ServiceStateManager.isMediaProjectionActive.collectAsState()
@@ -163,6 +169,11 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
     var isTestingKey by remember { mutableStateOf(false) }
     var testKeyResult by remember { mutableStateOf<String?>(null) }
     var isKeyValid by remember { mutableStateOf<Boolean?>(null) }
+
+    // Groq API Test State
+    var isTestingGroqKey by remember { mutableStateOf(false) }
+    var testGroqKeyResult by remember { mutableStateOf<String?>(null) }
+    var isGroqKeyValid by remember { mutableStateOf<Boolean?>(null) }
 
     // Step-by-step OEM Guide Dialog
     var showOemGuideDialog by remember { mutableStateOf(false) }
@@ -346,6 +357,181 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // ⚡ Groq LPU Ultra-Fast Cloud Engine Card
+            GlassCard(modifier = Modifier.fillMaxWidth(), borderGlow = true, cornerRadius = 18.dp) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.RocketLaunch, null, tint = CyberCyan, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Groq LPU", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+
+                        // Activate / Active Status Button
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (activeAiEngine == "groq") MintEmerald.copy(alpha = 0.2f) else CarbonElevated)
+                                .clickable {
+                                    scope.launch {
+                                        appPreferences.setPreferredAiEngine("groq")
+                                        Toast.makeText(context, "⚡ Groq LPU Activated as Active AI Engine", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (activeAiEngine == "groq") {
+                                    Icon(Icons.Default.CheckCircle, null, tint = MintEmerald, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Active", color = MintEmerald, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Text("Activate", color = TextOffWhite, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Get Free Key Direct Link
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyberCyan.copy(alpha = 0.15f))
+                                .clickable {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys")).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Free Key", color = CyberCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Icon(Icons.Default.OpenInNew, null, tint = CyberCyan, modifier = Modifier.size(11.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Ultra-fast LPU inference: Llama 3.3 70B for Live Interview & Viva, and Llama 3.2 Vision for Circle to Search. Generates full answers in <300ms.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = groqKeyInput,
+                        onValueChange = {
+                            groqKeyInput = it
+                            testGroqKeyResult = null
+                            isGroqKeyValid = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Paste console.groq.com key...", fontSize = 13.sp, color = TextSubtle) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = CarbonElevated,
+                            unfocusedContainerColor = CarbonElevated,
+                            focusedTextColor = TextPureWhite,
+                            unfocusedTextColor = TextPureWhite,
+                            focusedIndicatorColor = CyberCyan,
+                            unfocusedIndicatorColor = Color.Transparent
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        NeonButton(
+                            text = "Save Key",
+                            onClick = {
+                                scope.launch {
+                                    appPreferences.setGroqApiKey(groqKeyInput.trim())
+                                    Toast.makeText(context, "Groq API Key Saved", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            icon = Icons.Default.Key,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        NeonButton(
+                            text = if (isTestingGroqKey) "Testing..." else "Test Key",
+                            onClick = {
+                                val cleanKey = groqKeyInput.trim().replace("\n", "").replace("\r", "").replace(" ", "")
+                                if (cleanKey.isBlank()) {
+                                    Toast.makeText(context, "Please paste a key first", Toast.LENGTH_SHORT).show()
+                                    return@NeonButton
+                                }
+                                scope.launch {
+                                    isTestingGroqKey = true
+                                    testGroqKeyResult = null
+                                    val client = GroqClient(cleanKey)
+                                    val result = client.testConnection()
+                                    isTestingGroqKey = false
+                                    if (result.isSuccess) {
+                                        isGroqKeyValid = true
+                                        val modelName = result.getOrNull() ?: "Groq Active"
+                                        testGroqKeyResult = "✅ Connected & Verified ($modelName)"
+                                        appPreferences.setGroqApiKey(cleanKey)
+                                    } else {
+                                        isGroqKeyValid = false
+                                        val err = result.exceptionOrNull()?.message ?: "Unknown Error"
+                                        testGroqKeyResult = err
+                                    }
+                                }
+                            },
+                            icon = Icons.Default.Verified,
+                            isPrimary = false,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    if (isTestingGroqKey) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = CyberCyan, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connecting to Groq LPU...", color = TextMuted, fontSize = 12.sp)
+                        }
+                    } else if (testGroqKeyResult != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isGroqKeyValid == true) MintEmerald.copy(alpha = 0.15f) else RoseCrimson.copy(alpha = 0.15f))
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (isGroqKeyValid == true) Icons.Default.CheckCircle else Icons.Default.Close,
+                                null,
+                                tint = if (isGroqKeyValid == true) MintEmerald else RoseCrimson,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = testGroqKeyResult ?: "",
+                                color = if (isGroqKeyValid == true) MintEmerald else RoseCrimson,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Gemini Multimodal Engine Card
             GlassCard(modifier = Modifier.fillMaxWidth(), borderGlow = true, cornerRadius = 18.dp) {
                 Column {
@@ -355,7 +541,34 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
                     ) {
                         Icon(Icons.Default.AutoAwesome, null, tint = HyperViolet, modifier = Modifier.size(22.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Gemini 1.5 Flash Vision", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                        Text("Gemini Flash Vision", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+
+                        // Activate / Active Status Button
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (activeAiEngine == "gemini") MintEmerald.copy(alpha = 0.2f) else CarbonElevated)
+                                .clickable {
+                                    scope.launch {
+                                        appPreferences.setPreferredAiEngine("gemini")
+                                        Toast.makeText(context, "✨ Gemini Vision Activated as Active AI Engine", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (activeAiEngine == "gemini") {
+                                    Icon(Icons.Default.CheckCircle, null, tint = MintEmerald, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Active", color = MintEmerald, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Text("Activate", color = TextOffWhite, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         // Get Free Key Direct Link
                         Row(
@@ -371,9 +584,9 @@ fun MainDashboardScreen(appPreferences: AppPreferences) {
                                 .padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Get Free Key", color = HyperViolet, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.OpenInNew, null, tint = HyperViolet, modifier = Modifier.size(12.dp))
+                            Text("Free Key", color = HyperViolet, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Icon(Icons.Default.OpenInNew, null, tint = HyperViolet, modifier = Modifier.size(11.dp))
                         }
                     }
 

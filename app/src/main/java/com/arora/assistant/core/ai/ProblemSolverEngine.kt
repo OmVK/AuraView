@@ -29,9 +29,10 @@ object ProblemSolverEngine {
     }
 
     suspend fun solveProblem(
-        client: GeminiClient,
-        bitmap: Bitmap?,
-        extractedText: String?
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
+        bitmap: Bitmap? = null,
+        extractedText: String? = null
     ): Result<String> {
         val prompt = buildString {
             append("Analyze this circled image:\n")
@@ -44,14 +45,32 @@ object ProblemSolverEngine {
             }
         }
 
-        val result = client.generateContent(
-            prompt = prompt,
-            bitmap = bitmap,
-            systemInstruction = null,
-            maxTokens = 2500,
-            temperature = 0.1
-        )
+        // 1. Try Groq LPU first if available
+        if (groqClient != null) {
+            val groqResult = groqClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmap,
+                systemInstruction = null,
+                maxTokens = 2500,
+                temperature = 0.1
+            )
+            if (groqResult.isSuccess && !groqResult.getOrNull().isNullOrBlank()) {
+                return groqResult.map { cleanMathFormatting(it) }
+            }
+        }
 
-        return result.map { cleanMathFormatting(it) }
+        // 2. Fallback to Gemini
+        if (geminiClient != null) {
+            val result = geminiClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmap,
+                systemInstruction = null,
+                maxTokens = 2500,
+                temperature = 0.1
+            )
+            return result.map { cleanMathFormatting(it) }
+        }
+
+        return Result.failure(Exception("No AI client available (Gemini or Groq)"))
     }
 }

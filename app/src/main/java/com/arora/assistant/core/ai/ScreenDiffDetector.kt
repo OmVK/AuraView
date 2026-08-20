@@ -14,7 +14,8 @@ Compare Screen A (Before) and Screen B (After):
 """
 
     suspend fun compareScreens(
-        client: GeminiClient,
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
         textA: String,
         textB: String,
         bitmapB: Bitmap? = null
@@ -28,10 +29,25 @@ $textA
 === SCREEN B (AFTER) ===
 $textB
 """
-        return client.generateContent(
-            prompt = prompt,
-            bitmap = bitmapB,
-            systemInstruction = DIFF_SYSTEM_PROMPT
-        )
+        if (groqClient != null) {
+            val res = groqClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmapB,
+                systemInstruction = DIFF_SYSTEM_PROMPT
+            )
+            if (res.isSuccess && !res.getOrNull().isNullOrBlank()) {
+                return res
+            }
+        }
+
+        if (geminiClient != null) {
+            return geminiClient.generateContent(
+                prompt = prompt,
+                bitmap = bitmapB,
+                systemInstruction = DIFF_SYSTEM_PROMPT
+            )
+        }
+
+        return Result.failure(Exception("No AI client configured for screen diff"))
     }
 }

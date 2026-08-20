@@ -54,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +63,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -76,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arora.assistant.core.ai.ChatSessionManager
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.data.AppPreferences
 import com.arora.assistant.ui.components.NeonButton
 import com.arora.assistant.ui.theme.ElectricCyan
@@ -118,52 +121,95 @@ fun FloatingInterviewCopilotView(
     var fontSizeSp by remember { mutableFloatStateOf(13.5f) }
     var isCamouflaged by remember { mutableStateOf(false) }
     var copiedNotice by remember { mutableStateOf(false) }
-    var apiKey by remember { mutableStateOf("") }
+    var rmsLevel by remember { mutableFloatStateOf(0f) }
+
+    val answerScrollState = rememberScrollState()
+    var isAutoScrollEnabled by remember { mutableStateOf(true) }
+    var autoScrollSpeed by remember { mutableFloatStateOf(1.0f) }
+
+    // Auto-scroll follow while streaming live chunks
+    LaunchedEffect(generatedAnswer) {
+        if (isAutoScrollEnabled && !generatedAnswer.isNullOrBlank() && isGenerating) {
+            answerScrollState.animateScrollTo(answerScrollState.maxValue)
+        }
+    }
+
+    // Hands-free teleprompter scroll after generation finishes
+    LaunchedEffect(isGenerating, generatedAnswer, isAutoScrollEnabled, autoScrollSpeed) {
+        if (!isGenerating && !generatedAnswer.isNullOrBlank() && isAutoScrollEnabled) {
+            kotlinx.coroutines.delay(1200)
+            while (isAutoScrollEnabled && answerScrollState.value < answerScrollState.maxValue) {
+                kotlinx.coroutines.delay((110 / autoScrollSpeed).toLong().coerceAtLeast(25L))
+                val nextPos = (answerScrollState.value + 3).coerceAtMost(answerScrollState.maxValue)
+                answerScrollState.scrollTo(nextPos)
+            }
+        }
+    }
+
+    var hasMicPermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val apiKey by appPreferences.geminiApiKey.collectAsState(initial = "")
+    val groqApiKey by appPreferences.groqApiKey.collectAsState(initial = "")
+    val preferredEngine by appPreferences.preferredAiEngine.collectAsState(initial = "groq")
 
     // Target Company / Role / Topic Context Info
     var contextInfo by remember { mutableStateOf("") }
     var isContextEditorOpen by remember { mutableStateOf(false) }
 
-    val sessionManager = remember(apiKey) {
-        if (apiKey.isNotBlank()) ChatSessionManager(apiKey) else null
-    }
-
-    // Load saved API Key
-    LaunchedEffect(Unit) {
-        apiKey = appPreferences.geminiApiKey.first()
+    val sessionManager = remember(apiKey, groqApiKey, preferredEngine) {
+        ChatSessionManager(apiKey = apiKey, groqApiKey = groqApiKey, activeEngine = preferredEngine)
     }
 
     // Audio Manager to silence continuous speech recognition earcon beeps on Samsung devices (e.g. S24 Ultra)
     val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }
 
-    // Speech Recognizer Lifecycle
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
-    val recognizerIntent = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra("android.speech.extra.DICTATION_MODE", true)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    fun stopListening() {
+        isListening = false
+        rmsLevel = 0f
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
+                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
+            }
+        } catch (e: Exception) {}
+
+        try {
+            speechRecognizer?.stopListening()
+            speechRecognizer?.destroy()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
+        speechRecognizer = null
     }
 
     fun triggerUniversalAnswerGeneration(promptQuestion: String) {
         if (promptQuestion.isBlank()) return
-        if (apiKey.isBlank()) {
-            generatedAnswer = "⚠️ Please set your Gemini API Key in Settings to generate live answers."
+        if (preferredEngine == "groq" && groqApiKey.isBlank()) {
+            generatedAnswer = "⚠️ Groq is active. Please enter your Groq API Key in Settings."
             return
         }
+        if (preferredEngine == "gemini" && apiKey.isBlank()) {
+            generatedAnswer = "⚠️ Gemini is active. Please enter your Gemini API Key in Settings."
+            return
+        }
+
+        // Auto-pause mic immediately so the candidate's own voice reading the answer is not picked up
+        stopListening()
 
         scope.launch {
             isGenerating = true
             generatedAnswer = ""
-            val manager = sessionManager ?: ChatSessionManager(apiKey)
-            manager.contextInfo = contextInfo
-            val result = manager.sendMessageStream(
+            sessionManager.contextInfo = contextInfo
+            val result = sessionManager.sendMessageStream(
                 userMessage = promptQuestion.trim(),
                 onChunk = { partial ->
                     generatedAnswer = partial
@@ -176,130 +222,138 @@ fun FloatingInterviewCopilotView(
         }
     }
 
-    DisposableEffect(speechRecognizer) {
-        val listener = object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                if (isListening) {
-                    scope.launch {
-                        kotlinx.coroutines.delay(400)
-                        if (isListening) {
-                            try {
-                                speechRecognizer.startListening(recognizerIntent)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
-                }
-            }
-
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val fullText = matches[0]
-                    currentSpeechStream = fullText
-                    detectedQuestion = fullText
-                    triggerUniversalAnswerGeneration(fullText)
-                }
-                if (isListening) {
-                    scope.launch {
-                        kotlinx.coroutines.delay(300)
-                        if (isListening) {
-                            try {
-                                speechRecognizer.startListening(recognizerIntent)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
-                }
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val partials = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!partials.isNullOrEmpty()) {
-                    val text = partials[0]
-                    currentSpeechStream = text
-                    if (text.length > 20 && (text.contains("what", true) || text.contains("how", true) || text.contains("tell me", true) || text.contains("explain", true) || text.contains("why", true) || text.contains("describe", true) || text.contains("design", true))) {
-                        detectedQuestion = text
-                    }
-                }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        }
-
-        speechRecognizer.setRecognitionListener(listener)
-        onDispose {
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
-                    audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
-                }
-            } catch (e: Exception) {}
-            speechRecognizer.destroy()
-        }
-    }
-
     fun startListening() {
+        hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasMicPermission) {
+            currentSpeechStream = "⚠️ Microphone permission not granted. Please enable in Settings."
+            return
+        }
+
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            currentSpeechStream = "⚠️ Speech recognizer service not available on this device."
+            return
+        }
+
+        stopListening()
         isListening = true
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            try {
                 audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_MUTE, 0)
                 audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_MUTE, 0)
-            }
-            speechRecognizer.startListening(recognizerIntent)
-        } catch (e: Exception) {
-            e.printStackTrace()
+            } catch (e: Exception) {}
         }
-    }
 
-    fun stopListening() {
-        isListening = false
         try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.ADJUST_UNMUTE, 0)
-                audioManager?.adjustStreamVolume(android.media.AudioManager.STREAM_SYSTEM, android.media.AudioManager.ADJUST_UNMUTE, 0)
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            speechRecognizer = recognizer
+
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             }
-            speechRecognizer.stopListening()
+
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    isListening = true
+                }
+
+                override fun onBeginningOfSpeech() {}
+
+                override fun onRmsChanged(rmsdB: Float) {
+                    rmsLevel = (rmsdB / 10f).coerceIn(0f, 1f)
+                }
+
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+
+                override fun onError(error: Int) {
+                    if (isListening && !isGenerating) {
+                        scope.launch {
+                            kotlinx.coroutines.delay(250)
+                            if (isListening && !isGenerating) {
+                                startListening()
+                            }
+                        }
+                    }
+                }
+
+                override fun onResults(results: Bundle?) {
+                    if (isGenerating) return
+
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        val fullText = matches[0]
+                        if (fullText.isNotBlank()) {
+                            currentSpeechStream = fullText
+                            detectedQuestion = fullText
+                            triggerUniversalAnswerGeneration(fullText)
+                            return
+                        }
+                    }
+                    if (isListening && !isGenerating) {
+                        scope.launch {
+                            kotlinx.coroutines.delay(250)
+                            if (isListening && !isGenerating) {
+                                startListening()
+                            }
+                        }
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    if (isGenerating || !isListening) return
+
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        val text = matches[0]
+                        if (text.isNotBlank()) {
+                            currentSpeechStream = text
+                            if (text.length > 15 && (text.contains("what", true) || text.contains("how", true) || text.contains("tell me", true) || text.contains("explain", true) || text.contains("why", true) || text.contains("describe", true) || text.contains("design", true))) {
+                                detectedQuestion = text
+                            }
+                        }
+                    }
+                }
+
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+
+            recognizer.startListening(intent)
         } catch (e: Exception) {
             e.printStackTrace()
+            isListening = false
         }
     }
 
-    // Camouflage Disguise Mode (Emergency 1-tap disguise as Notes)
+    DisposableEffect(Unit) {
+        onDispose {
+            stopListening()
+        }
+    }
+
+    // Camouflaged Panic Mode
     if (isCamouflaged) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF1E1E1E))
+                .padding(14.dp)
+                .clickable { isCamouflaged = false }
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Meeting Notes & Agendas", color = TextPureWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                IconButton(
-                    onClick = { isCamouflaged = false },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(Icons.Default.Visibility, "Restore AI View", tint = SkyOpal, modifier = Modifier.size(16.dp))
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Edit, null, tint = SkyOpal, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Sprint Meeting Notes", color = TextPureWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SoftSurface)
-                    .padding(12.dp)
-            ) {
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = "• Sprint Goals & Deliverables\n• Technical Debt & Pipeline Improvements\n• Performance Optimization Targets\n• Next Steps for Q4",
                     color = TextOffWhite,
@@ -316,22 +370,27 @@ fun FloatingInterviewCopilotView(
             .fillMaxSize()
             .padding(10.dp)
     ) {
-        // Master 1-Tap Start / Stop Live Listening Bar
+        // Master Smart Action Bar
         Row(
             modifier = Modifier.fillMaxWidth()
         ) {
-            if (!isListening) {
-                NeonButton(
-                    text = "▶ Start Live AI Copilot",
-                    onClick = {
-                        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                        startListening()
-                    },
+            if (isGenerating) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(38.dp)
-                )
-            } else {
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(SoftSurfaceElevated)
+                        .border(1.dp, SkyOpal.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(color = SkyOpal, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("⚡ Generating Answer...", color = ElectricCyan, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp)
+                    }
+                }
+            } else if (isListening) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -344,12 +403,53 @@ fun FloatingInterviewCopilotView(
                         },
                     contentAlignment = Alignment.Center
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
                         Icon(Icons.Default.Stop, null, tint = Color.White, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("■ Stop Listening", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("■ Listening to Interviewer (Tap to Pause)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            repeat(4) { index ->
+                                val barHeight = (8 + (rmsLevel * 14 * (index + 1) / 4)).dp
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(barHeight)
+                                        .clip(RoundedCornerShape(1.5.dp))
+                                        .background(Color.White.copy(alpha = 0.9f))
+                                )
+                            }
+                        }
                     }
                 }
+            } else if (generatedAnswer != null) {
+                NeonButton(
+                    text = "🎙️ Listen for Next Question",
+                    onClick = {
+                        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                        startListening()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                )
+            } else {
+                NeonButton(
+                    text = "▶ Start Live AI Copilot",
+                    onClick = {
+                        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                        startListening()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                )
             }
         }
 
@@ -413,6 +513,8 @@ fun FloatingInterviewCopilotView(
 
                 AnimatedVisibility(visible = isContextEditorOpen) {
                     Column(modifier = Modifier.padding(top = 4.dp)) {
+                        val focusRequester = com.arora.assistant.core.overlay.LocalWindowFocusRequester.current
+
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -429,7 +531,11 @@ fun FloatingInterviewCopilotView(
                                 onValueChange = { contextInfo = it },
                                 textStyle = TextStyle(color = TextPureWhite, fontSize = 11.sp),
                                 cursorBrush = SolidColor(SkyOpal),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { focusState ->
+                                        focusRequester?.invoke(focusState.isFocused)
+                                    }
                             )
                         }
                     }
@@ -554,21 +660,46 @@ fun FloatingInterviewCopilotView(
                 ) {
                     CircularProgressIndicator(color = SkyOpal, modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("⚡ Gemini Flash generating answer...", color = TextMuted, fontSize = 11.sp)
+                    Text(if (preferredEngine == "groq") "⚡ Groq LPU generating answer..." else "⚡ Gemini Flash generating answer...", color = TextMuted, fontSize = 11.sp)
                 }
             } else if (generatedAnswer != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = generatedAnswer!!,
-                        color = TextPureWhite,
-                        fontSize = fontSizeSp.sp,
-                        lineHeight = (fontSizeSp * 1.45f).sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(answerScrollState)
+                            .padding(bottom = 26.dp)
+                    ) {
+                        Text(
+                            text = generatedAnswer!!,
+                            color = TextPureWhite,
+                            fontSize = fontSizeSp.sp,
+                            lineHeight = (fontSizeSp * 1.45f).sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    // Floating Auto-Scroll HUD Pill (Bottom End)
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SoftSurfaceElevated.copy(alpha = 0.95f))
+                            .border(0.8.dp, SkyOpal.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                isAutoScrollEnabled = !isAutoScrollEnabled
+                            }
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isAutoScrollEnabled) "📜 Auto-Scroll: ON" else "📜 Auto-Scroll: OFF",
+                            color = if (isAutoScrollEnabled) NeonEmerald else TextMuted,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             } else {
                 Column(
@@ -597,58 +728,73 @@ fun FloatingInterviewCopilotView(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            fun applyRefiner(promptBuilder: (String) -> String) {
+                val current = generatedAnswer
+                if (current.isNullOrBlank()) return
+                scope.launch {
+                    isGenerating = true
+                    val prompt = promptBuilder(current)
+                    val candidateSys = buildString {
+                        append("You are the human candidate sitting in a job interview. Always answer directly in the first person ('I') as the job applicant speaking out loud. Never refer to yourself as an AI assistant or language model.")
+                        if (contextInfo.isNotBlank()) {
+                            append("\nTarget Role & Company: ${contextInfo.trim()}")
+                        }
+                    }
+                    if (preferredEngine == "groq") {
+                        if (groqApiKey.isBlank()) {
+                            isGenerating = false
+                            generatedAnswer = "⚠️ Groq is active. Please enter your Groq API Key in Settings."
+                            return@launch
+                        }
+                        val groq = GroqClient(groqApiKey)
+                        val res = groq.generateContent(prompt, systemInstruction = candidateSys)
+                        isGenerating = false
+                        generatedAnswer = res.getOrElse { "Error: ${it.message}" }
+                    } else {
+                        if (apiKey.isBlank()) {
+                            isGenerating = false
+                            generatedAnswer = "⚠️ Gemini is active. Please enter your Gemini API Key in Settings."
+                            return@launch
+                        }
+                        val client = GeminiClient(apiKey)
+                        val res = client.generateContent(prompt, systemInstruction = candidateSys)
+                        isGenerating = false
+                        generatedAnswer = res.getOrElse { "Error: ${it.message}" }
+                    }
+                }
+            }
+
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 item {
                     RefinerChip("⏱️ 15s Pitch") {
-                        if (generatedAnswer != null && apiKey.isNotBlank()) {
-                            scope.launch {
-                                isGenerating = true
-                                val client = GeminiClient(apiKey)
-                                val prompt = """Condense this answer into a 15-second spoken pitch (max 40 words).
+                        applyRefiner { ans ->
+                            """Condense this answer into a 15-second spoken pitch (max 40 words).
 Keep only the most impressive metric and the core action.
 Answer:
-$generatedAnswer"""
-                                val res = client.generateContent(prompt)
-                                isGenerating = false
-                                generatedAnswer = res.getOrElse { "Error: ${it.message}" }
-                            }
+$ans"""
                         }
                     }
                 }
                 item {
                     RefinerChip("📈 Add Metrics") {
-                        if (generatedAnswer != null && apiKey.isNotBlank()) {
-                            scope.launch {
-                                isGenerating = true
-                                val client = GeminiClient(apiKey)
-                                val prompt = """Enrich this answer with impressive numbers, percentages, benchmark latencies, or business ROI.
+                        applyRefiner { ans ->
+                            """Enrich this answer with impressive numbers, percentages, benchmark latencies, or business ROI.
 If no real numbers exist, use realistic industry benchmarks and label them as "industry average".
 Answer:
-$generatedAnswer"""
-                                val res = client.generateContent(prompt)
-                                isGenerating = false
-                                generatedAnswer = res.getOrElse { "Error: ${it.message}" }
-                            }
+$ans"""
                         }
                     }
                 }
                 item {
                     RefinerChip("⚖️ Trade-offs") {
-                        if (generatedAnswer != null && apiKey.isNotBlank()) {
-                            scope.launch {
-                                isGenerating = true
-                                val client = GeminiClient(apiKey)
-                                val prompt = """Add 2 alternative approaches to this answer with clear trade-offs.
+                        applyRefiner { ans ->
+                            """Add 2 alternative approaches to this answer with clear trade-offs.
 Format: "Alternative A: [approach] — best when [condition]. Alternative B: [approach] — best when [condition]."
 Answer:
-$generatedAnswer"""
-                                val res = client.generateContent(prompt)
-                                isGenerating = false
-                                generatedAnswer = res.getOrElse { "Error: ${it.message}" }
-                            }
+$ans"""
                         }
                     }
                 }

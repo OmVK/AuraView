@@ -29,7 +29,8 @@ Output format:
 
     suspend fun summarizeSession(
         context: Context,
-        client: GeminiClient,
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
         durationMillis: Long = 2 * 60 * 60 * 1000,
         userNotes: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
@@ -56,8 +57,17 @@ Output format:
 
         val prompt = "$DAILY_SESSION_REPORT_PROMPT\n\n$timelineDump"
 
-        client.generateContent(
-            prompt = prompt
-        )
+        if (groqClient != null) {
+            val groqRes = groqClient.generateContent(prompt = prompt)
+            if (groqRes.isSuccess && !groqRes.getOrNull().isNullOrBlank()) {
+                return@withContext groqRes
+            }
+        }
+
+        if (geminiClient != null) {
+            return@withContext geminiClient.generateContent(prompt = prompt)
+        }
+
+        Result.failure(Exception("No AI client configured for session summary"))
     }
 }

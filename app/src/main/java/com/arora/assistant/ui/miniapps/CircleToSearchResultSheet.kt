@@ -37,13 +37,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -66,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -76,7 +78,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.arora.assistant.core.ai.ChatMessage
 import com.arora.assistant.core.ai.GeminiClient
+import com.arora.assistant.core.ai.GroqClient
 import com.arora.assistant.core.ai.ProblemSolverEngine
+import com.arora.assistant.core.data.AppPreferences
 import com.arora.assistant.ui.theme.NeonEmerald
 import com.arora.assistant.ui.theme.SkyOpal
 import com.arora.assistant.ui.theme.SoftAmber
@@ -91,27 +95,33 @@ import com.arora.assistant.ui.theme.TextPureWhite
 import com.arora.assistant.ui.theme.TextSubtle
 import kotlinx.coroutines.launch
 
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun CircleToSearchResultSheet(
     bitmap: Bitmap?,
     ocrText: String,
     initialIsVisualMode: Boolean,
-    geminiClient: GeminiClient?,
+    geminiClient: GeminiClient? = null,
+    groqClient: GroqClient? = null,
+    activeEngine: String = "groq",
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val appPreferences = remember { AppPreferences(context) }
+
+    // Collect live keys from DataStore
+    val savedGeminiKey by appPreferences.geminiApiKey.collectAsState(initial = "")
+    val savedGroqKey by appPreferences.groqApiKey.collectAsState(initial = "")
+    val savedActiveEngine by appPreferences.preferredAiEngine.collectAsState(initial = "groq")
 
     var isVisualMode by remember { mutableStateOf(initialIsVisualMode) }
-
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("✨ AI Chat & Search", "🦁 Brave Search", "📋 Extracted Text", "📖 Translate", "📚 Study & Anki")
 
-    // Interactive Chat History
     val chatMessages = remember { mutableStateListOf<ChatMessage>() }
     var isQueryingAi by remember { mutableStateOf(false) }
     var followUpInput by remember { mutableStateOf("") }
+    var hasTriggeredInitial by remember { mutableStateOf(false) }
 
     val quickPrompts = if (!isVisualMode) {
         listOf(
@@ -132,7 +142,7 @@ fun CircleToSearchResultSheet(
     }
 
     fun sendChatMessage(userQuery: String) {
-        if (userQuery.isBlank() || geminiClient == null) return
+        if (userQuery.isBlank()) return
         val q = userQuery.trim()
         chatMessages.add(ChatMessage("user", q))
         chatMessages.add(ChatMessage("model", "⏳ Processing..."))
@@ -165,7 +175,47 @@ fun CircleToSearchResultSheet(
             }
 
             val targetBitmap = if (isVisualMode) bitmap else null
-            val result = geminiClient.streamGenerate(
+
+            if (savedActiveEngine == "groq") {
+                if (savedGroqKey.isBlank()) {
+                    isQueryingAi = false
+                    if (modelMsgIndex < chatMessages.size) {
+                        chatMessages[modelMsgIndex] = ChatMessage("model", "⚠️ Groq is active. Please enter your Groq API Key in Settings.")
+                    }
+                    return@launch
+                }
+                val dynamicGroqClient = GroqClient(savedGroqKey)
+                val groqRes = dynamicGroqClient.streamGenerate(
+                    prompt = prompt,
+                    bitmap = targetBitmap,
+                    maxTokens = 1000,
+                    onChunk = { partial ->
+                        val clean = ProblemSolverEngine.cleanMathFormatting(partial)
+                        if (modelMsgIndex < chatMessages.size) {
+                            chatMessages[modelMsgIndex] = ChatMessage("model", clean)
+                        }
+                    }
+                )
+                isQueryingAi = false
+                if (groqRes.isFailure) {
+                    if (modelMsgIndex < chatMessages.size) {
+                        chatMessages[modelMsgIndex] = ChatMessage("model", "Error: ${groqRes.exceptionOrNull()?.message}")
+                    }
+                }
+                return@launch
+            }
+
+            // Gemini Route
+            if (savedGeminiKey.isBlank()) {
+                isQueryingAi = false
+                if (modelMsgIndex < chatMessages.size) {
+                    chatMessages[modelMsgIndex] = ChatMessage("model", "⚠️ Gemini is active. Please enter your Gemini API Key in Settings.")
+                }
+                return@launch
+            }
+
+            val dynamicGeminiClient = GeminiClient(savedGeminiKey)
+            val result = dynamicGeminiClient.streamGenerate(
                 prompt = prompt,
                 bitmap = targetBitmap,
                 maxTokens = 1200,
@@ -185,11 +235,15 @@ fun CircleToSearchResultSheet(
         }
     }
 
-    // Automatically trigger initial analysis for the selected mode
-    LaunchedEffect(geminiClient) {
-        if (geminiClient != null && chatMessages.isEmpty()) {
+    // Trigger initial analysis when keys & preferences are ready
+    LaunchedEffect(savedGroqKey, savedGeminiKey, savedActiveEngine) {
+        val currentActiveKey = if (savedActiveEngine == "groq") savedGroqKey else savedGeminiKey
+        if (!hasTriggeredInitial && currentActiveKey.isNotBlank()) {
+            hasTriggeredInitial = true
             isQueryingAi = true
-            chatMessages.add(ChatMessage("model", "⚡ Analyzing with Gemini 2.0 Flash..."))
+            val engineName = if (savedActiveEngine == "groq") "⚡ Groq LPU" else "✨ Gemini Flash"
+            chatMessages.clear()
+            chatMessages.add(ChatMessage("model", "$engineName analyzing..."))
             val modelMsgIndex = 0
 
             val initialPrompt = if (isVisualMode) {
@@ -207,7 +261,32 @@ fun CircleToSearchResultSheet(
             }
 
             val targetBitmap = if (isVisualMode) bitmap else null
-            val res = geminiClient.streamGenerate(
+
+            if (savedActiveEngine == "groq") {
+                val dynamicGroqClient = GroqClient(savedGroqKey)
+                val groqRes = dynamicGroqClient.streamGenerate(
+                    prompt = initialPrompt,
+                    bitmap = targetBitmap,
+                    maxTokens = 1000,
+                    onChunk = { partial ->
+                        val clean = ProblemSolverEngine.cleanMathFormatting(partial)
+                        if (modelMsgIndex < chatMessages.size) {
+                            chatMessages[modelMsgIndex] = ChatMessage("model", clean)
+                        }
+                    }
+                )
+                isQueryingAi = false
+                if (groqRes.isFailure) {
+                    if (modelMsgIndex < chatMessages.size) {
+                        chatMessages[modelMsgIndex] = ChatMessage("model", "Error: ${groqRes.exceptionOrNull()?.message}")
+                    }
+                }
+                return@LaunchedEffect
+            }
+
+            // Gemini Route
+            val dynamicGeminiClient = GeminiClient(savedGeminiKey)
+            val res = dynamicGeminiClient.streamGenerate(
                 prompt = initialPrompt,
                 bitmap = targetBitmap,
                 maxTokens = 1200,
@@ -224,17 +303,12 @@ fun CircleToSearchResultSheet(
                     chatMessages[modelMsgIndex] = ChatMessage("model", "Error: ${res.exceptionOrNull()?.message}")
                 }
             }
+        } else if (!hasTriggeredInitial && savedGroqKey.isBlank() && savedGeminiKey.isBlank()) {
+            // Both keys are empty
+            chatMessages.clear()
+            val engineName = if (savedActiveEngine == "groq") "Groq" else "Gemini"
+            chatMessages.add(ChatMessage("model", "⚠️ $engineName is active. Please enter your $engineName API Key in Settings."))
         }
-    }
-
-    var translationText by remember { mutableStateOf<String?>(null) }
-    var isTranslating by remember { mutableStateOf(false) }
-    var studyNotesResponse by remember { mutableStateOf<String?>(null) }
-    var isQueryingStudyNotes by remember { mutableStateOf(false) }
-
-    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-    val searchQuery = remember(ocrText) {
-        if (ocrText.isNotBlank()) ocrText.trim() else "Brave visual web search"
     }
 
     Box(
@@ -271,133 +345,20 @@ fun CircleToSearchResultSheet(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // Header with Image Reference Card & Close Button
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        if (bitmap != null) {
-                            Image(
-                                bitmap = bitmap.asImageBitmap(),
-                                contentDescription = "Referenced Circled Area",
-                                modifier = Modifier
-                                    .size(width = 54.dp, height = 40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .border(1.2.dp, if (isVisualMode) SoftLavender else NeonEmerald, RoundedCornerShape(8.dp))
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = if (isVisualMode) "📸 Visual Search" else "⚡ Text Search",
-                                    color = TextPureWhite,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
-                                )
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(if (isVisualMode) SoftLavender.copy(alpha = 0.2f) else NeonEmerald.copy(alpha = 0.2f))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                ) {
-                                    Text(
-                                        text = if (isVisualMode) "Image Ref" else "Low Tokens",
-                                        color = if (isVisualMode) SoftLavender else NeonEmerald,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                            Text(
-                                text = if (ocrText.isNotEmpty()) ocrText.take(35) + "..." else "Visual Area Referenced",
-                                color = TextMuted,
-                                fontSize = 11.sp,
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(SoftSurface)
-                    ) {
-                        Icon(Icons.Default.Close, "Close", tint = TextMuted, modifier = Modifier.size(15.dp))
-                    }
-                }
+                SheetHeader(
+                    bitmap = bitmap,
+                    ocrText = ocrText,
+                    isVisualMode = isVisualMode,
+                    onClose = onClose
+                )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Mode Switcher Pills (Allows switching anytime)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SoftSurface)
-                        .padding(3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // 1. Text Mode Pill
-                    val isTextSelected = !isVisualMode
-                    val textBg by animateColorAsState(if (isTextSelected) NeonEmerald.copy(alpha = 0.25f) else Color.Transparent)
-                    val textBorder by animateColorAsState(if (isTextSelected) NeonEmerald else Color.Transparent)
-
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(textBg)
-                            .border(1.dp, textBorder, RoundedCornerShape(10.dp))
-                            .clickable { isVisualMode = false }
-                            .padding(vertical = 5.dp, horizontal = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.Bolt, "Text Mode", tint = if (isTextSelected) NeonEmerald else TextMuted, modifier = Modifier.size(13.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "⚡ Text Mode (Low Tokens)",
-                            color = if (isTextSelected) TextPureWhite else TextMuted,
-                            fontWeight = if (isTextSelected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 10.5.sp
-                        )
-                    }
-
-                    // 2. Visual Image Mode Pill
-                    val isImgSelected = isVisualMode
-                    val imgBg by animateColorAsState(if (isImgSelected) SoftLavender.copy(alpha = 0.25f) else Color.Transparent)
-                    val imgBorder by animateColorAsState(if (isImgSelected) SoftLavender else Color.Transparent)
-
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(imgBg)
-                            .border(1.dp, imgBorder, RoundedCornerShape(10.dp))
-                            .clickable { isVisualMode = true }
-                            .padding(vertical = 5.dp, horizontal = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.Image, "Visual Mode", tint = if (isImgSelected) SoftLavender else TextMuted, modifier = Modifier.size(13.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "📸 Visual Mode",
-                            color = if (isImgSelected) TextPureWhite else TextMuted,
-                            fontWeight = if (isImgSelected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 10.5.sp
-                        )
-                    }
-                }
+                // Mode Switcher Pills
+                ModeSwitcherPills(
+                    isVisualMode = isVisualMode,
+                    onModeChange = { isVisualMode = it }
+                )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -445,296 +406,27 @@ fun CircleToSearchResultSheet(
                         .padding(if (selectedTabIndex == 1) 0.dp else 10.dp)
                 ) {
                     when (selectedTabIndex) {
-                        // 0. AI Chat Stream
-                        0 -> {
-                            val scrollState = rememberScrollState()
-                            LaunchedEffect(chatMessages.size, isQueryingAi) {
-                                scrollState.animateScrollTo(scrollState.maxValue)
-                            }
-
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(scrollState)
-                            ) {
-                                if (bitmap == null) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(SoftAmber.copy(alpha = 0.15f))
-                                            .border(0.8.dp, SoftAmber.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                                            .padding(10.dp)
-                                    ) {
-                                        Text(
-                                            text = "⚠️ Screenshot Permission Sync: Android requires toggling Accessibility OFF and ON once in Settings to register screenshot capture capability.",
-                                            color = SoftAmber,
-                                            fontSize = 11.5.sp,
-                                            lineHeight = 16.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(SoftAmber)
-                                                .clickable {
-                                                    try {
-                                                        val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                                        }
-                                                        context.startActivity(intent)
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(context, "Open Settings -> Accessibility", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                                .padding(horizontal = 10.dp, vertical = 5.dp)
-                                        ) {
-                                            Text(
-                                                text = "⚙️ Open Accessibility Settings",
-                                                color = Color.Black,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                }
-
-                                if (chatMessages.isEmpty() && isQueryingAi) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            color = if (isVisualMode) SoftLavender else NeonEmerald,
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = if (isVisualMode) "Gemini is analyzing visual area..." else "Gemini is processing extracted text...",
-                                            color = TextMuted,
-                                            fontSize = 12.sp
-                                        )
-                                    }
-                                } else {
-                                    chatMessages.forEach { msg ->
-                                        if (msg.role == "user") {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 4.dp),
-                                                horizontalArrangement = Arrangement.End
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(12.dp))
-                                                        .background(if (isVisualMode) SoftLavender.copy(alpha = 0.85f) else NeonEmerald.copy(alpha = 0.85f))
-                                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                                ) {
-                                                    Text(msg.text, color = Color.White, fontSize = 12.5.sp)
-                                                }
-                                            }
-                                        } else {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 4.dp),
-                                                horizontalArrangement = Arrangement.Start
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clip(RoundedCornerShape(12.dp))
-                                                        .background(SoftSurfaceElevated)
-                                                        .border(0.8.dp, SoftCardBorder, RoundedCornerShape(12.dp))
-                                                        .padding(10.dp)
-                                                ) {
-                                                    Text(
-                                                        text = msg.text,
-                                                        color = TextPureWhite,
-                                                        fontSize = 13.sp,
-                                                        lineHeight = 18.sp
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (isQueryingAi) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(16.dp),
-                                                color = if (isVisualMode) SoftLavender else NeonEmerald,
-                                                strokeWidth = 2.dp
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Gemini thinking...", color = TextMuted, fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 1. Brave Web Search Tab
-                        1 -> {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(SoftSurface)
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    IconButton(
-                                        onClick = { webViewInstance?.goBack() },
-                                        modifier = Modifier.size(26.dp)
-                                    ) {
-                                        Icon(Icons.Default.ArrowBack, "Back", tint = TextMuted, modifier = Modifier.size(16.dp))
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "🦁 Brave: $searchQuery",
-                                        color = SkyOpal,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    IconButton(
-                                        onClick = { webViewInstance?.reload() },
-                                        modifier = Modifier.size(26.dp)
-                                    ) {
-                                        Icon(Icons.Default.Refresh, "Reload", tint = TextMuted, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-
-                                AndroidView(
-                                    factory = { ctx ->
-                                        WebView(ctx).apply {
-                                            layoutParams = ViewGroup.LayoutParams(
-                                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                                ViewGroup.LayoutParams.MATCH_PARENT
-                                            )
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            settings.cacheMode = WebSettings.LOAD_DEFAULT
-                                            settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                                            webViewClient = WebViewClient()
-                                            webChromeClient = WebChromeClient()
-                                            loadUrl("https://search.brave.com/search?q=" + Uri.encode(searchQuery))
-                                            webViewInstance = this
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-
-                        // 2. Extracted Text Tab
-                        2 -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Circled OCR Text", color = TextMuted, fontSize = 11.sp)
-                                    IconButton(
-                                        onClick = {
-                                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            cb.setPrimaryClip(ClipData.newPlainText("Circled Text", ocrText))
-                                            Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(Icons.Default.ContentCopy, "Copy", tint = SoftLavender, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = ocrText.ifEmpty { "No text detected in circled region." },
-                                    color = TextOffWhite,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
-                                )
-                            }
-                        }
-
-                        // 3. Translate Tab
-                        3 -> {
-                            var selectedLang by remember { mutableStateOf("Nepali") }
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    listOf("Nepali" to "🇳🇵 Nepali", "Hindi" to "🇮🇳 Hindi", "Spanish" to "🇪🇸 Spanish", "French" to "🇫🇷 French").forEach { (k, label) ->
-                                        val isSel = selectedLang == k
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(if (isSel) SoftLavender else SoftSurface)
-                                                .clickable {
-                                                    selectedLang = k
-                                                    if (ocrText.isNotBlank() && geminiClient != null) {
-                                                        scope.launch {
-                                                            isTranslating = true
-                                                            val res = geminiClient.generateContent("Translate this text accurately to $k:\n\n$ocrText")
-                                                            isTranslating = false
-                                                            translationText = res.getOrNull()
-                                                        }
-                                                    }
-                                                }
-                                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Text(label, color = if (isSel) Color.White else TextOffWhite, fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = translationText ?: "Select a language above to translate.",
-                                    color = TextPureWhite,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
-                                )
-                            }
-                        }
-
-                        // 4. Study & Anki Flashcards
-                        4 -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                if (studyNotesResponse == null && !isQueryingStudyNotes && geminiClient != null) {
-                                    LaunchedEffect(Unit) {
-                                        isQueryingStudyNotes = true
-                                        val prompt = "Create structured study notes and 3 Q&A flashcards for this content:\n\n$ocrText"
-                                        val res = geminiClient.generateContent(prompt, bitmap = bitmap)
-                                        isQueryingStudyNotes = false
-                                        studyNotesResponse = res.getOrNull()
-                                    }
-                                }
-                                if (isQueryingStudyNotes) {
-                                    CircularProgressIndicator(color = SoftLavender, modifier = Modifier.size(20.dp))
-                                } else {
-                                    Text(
-                                        text = studyNotesResponse ?: "Add Gemini Key in Settings to generate flashcards.",
-                                        color = TextPureWhite,
-                                        fontSize = 13.sp,
-                                        lineHeight = 18.sp
-                                    )
-                                }
-                            }
-                        }
+                        0 -> AiChatTabContent(
+                            chatMessages = chatMessages,
+                            isQueryingAi = isQueryingAi,
+                            isVisualMode = isVisualMode,
+                            bitmap = bitmap
+                        )
+                        1 -> BraveSearchTabContent(ocrText = ocrText)
+                        2 -> ExtractedTextTabContent(ocrText = ocrText)
+                        3 -> TranslateTabContent(
+                            ocrText = ocrText,
+                            geminiKey = savedGeminiKey,
+                            groqKey = savedGroqKey,
+                            activeEngine = savedActiveEngine
+                        )
+                        4 -> StudyDeckTabContent(
+                            ocrText = ocrText,
+                            bitmap = bitmap,
+                            geminiKey = savedGeminiKey,
+                            groqKey = savedGroqKey,
+                            activeEngine = savedActiveEngine
+                        )
                     }
                 }
 
@@ -742,7 +434,6 @@ fun CircleToSearchResultSheet(
                 if (selectedTabIndex == 0) {
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Quick Question Suggestion Chips
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -763,15 +454,20 @@ fun CircleToSearchResultSheet(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // User Question Input Field
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val focusRequester = com.arora.assistant.core.overlay.LocalWindowFocusRequester.current
+
                         OutlinedTextField(
                             value = followUpInput,
                             onValueChange = { followUpInput = it },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { focusState ->
+                                    focusRequester?.invoke(focusState.isFocused)
+                                },
                             placeholder = {
                                 Text(
                                     text = if (isVisualMode) "Ask about circled visual area..." else "Ask about extracted text...",
@@ -798,6 +494,7 @@ fun CircleToSearchResultSheet(
                                 if (followUpInput.isNotBlank()) {
                                     val query = followUpInput
                                     followUpInput = ""
+                                    focusRequester?.invoke(false)
                                     sendChatMessage(query)
                                 }
                             },
@@ -806,11 +503,505 @@ fun CircleToSearchResultSheet(
                                 .clip(CircleShape)
                                 .background(if (isVisualMode) SoftLavender else NeonEmerald)
                         ) {
-                            Icon(Icons.Default.Send, "Send", tint = Color.White, modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Color.White, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SheetHeader(
+    bitmap: Bitmap?,
+    ocrText: String,
+    isVisualMode: Boolean,
+    onClose: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Referenced Circled Area",
+                    modifier = Modifier
+                        .size(width = 54.dp, height = 40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.2.dp, if (isVisualMode) SoftLavender else NeonEmerald, RoundedCornerShape(8.dp))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (isVisualMode) "📸 Visual Search" else "⚡ Text Search",
+                        color = TextPureWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (isVisualMode) SoftLavender.copy(alpha = 0.2f) else NeonEmerald.copy(alpha = 0.2f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = if (isVisualMode) "Image Ref" else "Low Tokens",
+                            color = if (isVisualMode) SoftLavender else NeonEmerald,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Text(
+                    text = if (ocrText.isNotEmpty()) ocrText.take(35) + "..." else "Visual Area Referenced",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    maxLines = 1
+                )
+            }
+        }
+
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(SoftSurface)
+        ) {
+            Icon(Icons.Default.Close, "Close", tint = TextMuted, modifier = Modifier.size(15.dp))
+        }
+    }
+}
+
+@Composable
+private fun ModeSwitcherPills(
+    isVisualMode: Boolean,
+    onModeChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(SoftSurface)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        val isTextSelected = !isVisualMode
+        val textBg by animateColorAsState(if (isTextSelected) NeonEmerald.copy(alpha = 0.25f) else Color.Transparent)
+        val textBorder by animateColorAsState(if (isTextSelected) NeonEmerald else Color.Transparent)
+
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(textBg)
+                .border(1.dp, textBorder, RoundedCornerShape(10.dp))
+                .clickable { onModeChange(false) }
+                .padding(vertical = 5.dp, horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Bolt, "Text Mode", tint = if (isTextSelected) NeonEmerald else TextMuted, modifier = Modifier.size(13.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "⚡ Text Mode (Low Tokens)",
+                color = if (isTextSelected) TextPureWhite else TextMuted,
+                fontWeight = if (isTextSelected) FontWeight.Bold else FontWeight.Normal,
+                fontSize = 10.5.sp
+            )
+        }
+
+        val isImgSelected = isVisualMode
+        val imgBg by animateColorAsState(if (isImgSelected) SoftLavender.copy(alpha = 0.25f) else Color.Transparent)
+        val imgBorder by animateColorAsState(if (isImgSelected) SoftLavender else Color.Transparent)
+
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(imgBg)
+                .border(1.dp, imgBorder, RoundedCornerShape(10.dp))
+                .clickable { onModeChange(true) }
+                .padding(vertical = 5.dp, horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Image, "Visual Mode", tint = if (isImgSelected) SoftLavender else TextMuted, modifier = Modifier.size(13.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "📸 Visual Mode",
+                color = if (isImgSelected) TextPureWhite else TextMuted,
+                fontWeight = if (isImgSelected) FontWeight.Bold else FontWeight.Normal,
+                fontSize = 10.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiChatTabContent(
+    chatMessages: List<ChatMessage>,
+    isQueryingAi: Boolean,
+    isVisualMode: Boolean,
+    bitmap: Bitmap?
+) {
+    val context = LocalContext.current
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(chatMessages.size, isQueryingAi) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+    ) {
+        if (bitmap == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SoftAmber.copy(alpha = 0.15f))
+                    .border(0.8.dp, SoftAmber.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = "⚠️ Screenshot Permission Sync: Android requires toggling Accessibility OFF and ON once in Settings to register screenshot capture capability.",
+                    color = SoftAmber,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(SoftAmber)
+                        .clickable {
+                            try {
+                                val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Open Settings -> Accessibility", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = "⚙️ Open Accessibility Settings",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        if (chatMessages.isEmpty() && isQueryingAi) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = if (isVisualMode) SoftLavender else NeonEmerald,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = if (isVisualMode) "AI is analyzing visual area..." else "AI is processing extracted text...",
+                    color = TextMuted,
+                    fontSize = 12.sp
+                )
+            }
+        } else {
+            chatMessages.forEach { msg ->
+                if (msg.role == "user") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isVisualMode) SoftLavender.copy(alpha = 0.85f) else NeonEmerald.copy(alpha = 0.85f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(msg.text, color = Color.White, fontSize = 12.5.sp)
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(SoftSurfaceElevated)
+                                .border(0.8.dp, SoftCardBorder, RoundedCornerShape(12.dp))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = msg.text,
+                                color = TextPureWhite,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (isQueryingAi) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = if (isVisualMode) SoftLavender else NeonEmerald,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("AI thinking...", color = TextMuted, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun BraveSearchTabContent(ocrText: String) {
+    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    val searchQuery = remember(ocrText) {
+        if (ocrText.isNotBlank()) ocrText.trim() else "Brave visual web search"
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SoftSurface)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { webViewInstance?.goBack() },
+                modifier = Modifier.size(26.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = TextMuted, modifier = Modifier.size(16.dp))
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "🦁 Brave: $searchQuery",
+                color = SkyOpal,
+                fontSize = 11.sp,
+                maxLines = 1,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = { webViewInstance?.reload() },
+                modifier = Modifier.size(26.dp)
+            ) {
+                Icon(Icons.Default.Refresh, "Reload", tint = TextMuted, modifier = Modifier.size(16.dp))
+            }
+        }
+
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    webViewClient = WebViewClient()
+                    webChromeClient = WebChromeClient()
+                    loadUrl("https://search.brave.com/search?q=" + Uri.encode(searchQuery))
+                    webViewInstance = this
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+@Composable
+private fun ExtractedTextTabContent(ocrText: String) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Circled OCR Text", color = TextMuted, fontSize = 11.sp)
+            IconButton(
+                onClick = {
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cb.setPrimaryClip(ClipData.newPlainText("Circled Text", ocrText))
+                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(Icons.Default.ContentCopy, "Copy", tint = SoftLavender, modifier = Modifier.size(16.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = ocrText.ifEmpty { "No text detected in circled region." },
+            color = TextOffWhite,
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+    }
+}
+
+@Composable
+private fun TranslateTabContent(
+    ocrText: String,
+    geminiKey: String,
+    groqKey: String,
+    activeEngine: String
+) {
+    val scope = rememberCoroutineScope()
+    var selectedLang by remember { mutableStateOf("Nepali") }
+    var translationText by remember { mutableStateOf<String?>(null) }
+    var isTranslating by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf("Nepali" to "🇳🇵 Nepali", "Hindi" to "🇮🇳 Hindi", "Spanish" to "🇪🇸 Spanish", "French" to "🇫🇷 French").forEach { (k, label) ->
+                val isSel = selectedLang == k
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isSel) SoftLavender else SoftSurface)
+                        .clickable {
+                            selectedLang = k
+                            if (ocrText.isNotBlank()) {
+                                scope.launch {
+                                    isTranslating = true
+                                    val prompt = "Translate this text accurately to $k:\n\n$ocrText"
+                                    if (activeEngine == "groq") {
+                                        if (groqKey.isNotBlank()) {
+                                            val client = GroqClient(groqKey)
+                                            val gRes = client.generateContent(prompt)
+                                            isTranslating = false
+                                            translationText = gRes.getOrElse { "Error: ${it.message}" }
+                                        } else {
+                                            isTranslating = false
+                                            translationText = "⚠️ Groq is active. Please enter your Groq API Key in Settings."
+                                        }
+                                        return@launch
+                                    }
+                                    if (geminiKey.isNotBlank()) {
+                                        val client = GeminiClient(geminiKey)
+                                        val res = client.generateContent(prompt)
+                                        isTranslating = false
+                                        translationText = res.getOrElse { "Error: ${it.message}" }
+                                    } else {
+                                        isTranslating = false
+                                        translationText = "⚠️ Gemini is active. Please enter your Gemini API Key in Settings."
+                                    }
+                                }
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(label, color = if (isSel) Color.White else TextOffWhite, fontSize = 11.sp)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        if (isTranslating) {
+            CircularProgressIndicator(color = SoftLavender, modifier = Modifier.size(20.dp))
+        } else {
+            Text(
+                text = translationText ?: "Select a language above to translate.",
+                color = TextPureWhite,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun StudyDeckTabContent(
+    ocrText: String,
+    bitmap: Bitmap?,
+    geminiKey: String,
+    groqKey: String,
+    activeEngine: String
+) {
+    var studyNotesResponse by remember { mutableStateOf<String?>(null) }
+    var isQueryingStudyNotes by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        if (studyNotesResponse == null && !isQueryingStudyNotes) {
+            LaunchedEffect(geminiKey, groqKey, activeEngine) {
+                val activeKey = if (activeEngine == "groq") groqKey else geminiKey
+                if (activeKey.isNotBlank()) {
+                    isQueryingStudyNotes = true
+                    val prompt = "Create structured study notes and 3 Q&A flashcards for this content:\n\n$ocrText"
+                    if (activeEngine == "groq") {
+                        val client = GroqClient(groqKey)
+                        val gRes = client.generateContent(prompt, bitmap = bitmap)
+                        isQueryingStudyNotes = false
+                        studyNotesResponse = gRes.getOrElse { "Error: ${it.message}" }
+                    } else {
+                        val client = GeminiClient(geminiKey)
+                        val res = client.generateContent(prompt, bitmap = bitmap)
+                        isQueryingStudyNotes = false
+                        studyNotesResponse = res.getOrElse { "Error: ${it.message}" }
+                    }
+                }
+            }
+        }
+        if (isQueryingStudyNotes) {
+            CircularProgressIndicator(color = SoftLavender, modifier = Modifier.size(20.dp))
+        } else {
+            Text(
+                text = studyNotesResponse ?: "Add Groq or Gemini Key in Settings to generate flashcards.",
+                color = TextPureWhite,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
         }
     }
 }

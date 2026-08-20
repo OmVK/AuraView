@@ -69,7 +69,8 @@ Output JSON only:
     )
 
     suspend fun enrichDetectedEntity(
-        client: GeminiClient,
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
         detectedType: String,
         screenText: String
     ): Result<ProactiveEnrichmentResponse> = withContext(Dispatchers.IO) {
@@ -78,10 +79,25 @@ Output JSON only:
 The user's screen shows a $detectedType.
 Screen text: "$screenText""""
 
-        val result = client.generateContent(prompt)
-        if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+        var cleanJson: String? = null
 
-        val cleanJson = result.getOrNull()?.removePrefix("```json")?.removePrefix("```")?.removeSuffix("```")?.trim() ?: "{}"
+        if (groqClient != null) {
+            val groqRes = groqClient.generateContent(prompt)
+            if (groqRes.isSuccess && !groqRes.getOrNull().isNullOrBlank()) {
+                cleanJson = groqRes.getOrNull()?.removePrefix("```json")?.removePrefix("```")?.removeSuffix("```")?.trim()
+            }
+        }
+
+        if (cleanJson == null && geminiClient != null) {
+            val result = geminiClient.generateContent(prompt)
+            if (result.isFailure) return@withContext Result.failure(result.exceptionOrNull()!!)
+            cleanJson = result.getOrNull()?.removePrefix("```json")?.removePrefix("```")?.removeSuffix("```")?.trim()
+        }
+
+        if (cleanJson.isNullOrBlank()) {
+            return@withContext Result.failure(Exception("No AI client configured or empty response"))
+        }
+
         try {
             val response = gson.fromJson(cleanJson, ProactiveEnrichmentResponse::class.java)
             Result.success(response)

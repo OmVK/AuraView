@@ -18,27 +18,31 @@ import java.util.concurrent.TimeUnit
 
 class GeminiClient(
     private val apiKey: String,
-    private var model: String = "gemini-2.0-flash"
+    private var model: String = "gemini-1.5-flash"
 ) {
 
     companion object {
         private const val TAG = "GeminiClient"
 
         @Volatile
-        var defaultWorkingModel: String = "gemini-2.0-flash"
+        var defaultWorkingModel: String = "gemini-1.5-flash"
 
         @Volatile
         var defaultWorkingVersion: String = "v1beta"
 
-        val FALLBACK_MODELS = listOf(
-            "gemini-2.0-flash",
-            "gemini-1.5-flash-latest",
+        @Volatile
+        var cachedAvailableModels: List<String> = emptyList()
+
+        val FALLBACK_CANDIDATES = listOf(
             "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
             "gemini-1.5-flash-002",
             "gemini-1.5-flash-001",
-            "gemini-1.5-pro-latest",
             "gemini-1.5-pro",
-            "gemini-pro"
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro-002"
         )
 
         fun compressAndEncodeBitmap(bitmap: Bitmap): String {
@@ -65,9 +69,9 @@ class GeminiClient(
     }
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(12, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -81,14 +85,64 @@ class GeminiClient(
             .replace(" ", "")
     }
 
+    private fun fetchAvailableModelsFromApi(cleanKey: String): List<String> {
+        val result = mutableListOf<String>()
+        for (version in listOf("v1beta", "v1")) {
+            try {
+                val url = "https://generativelanguage.googleapis.com/$version/models?key=$cleanKey"
+                val req = Request.Builder().url(url).get().build()
+                val resp = client.newCall(req).execute()
+                val body = resp.body?.string()
+
+                if (resp.isSuccessful && !body.isNullOrBlank()) {
+                    val json = gson.fromJson(body, JsonObject::class.java)
+                    val models = json.getAsJsonArray("models")
+                    if (models != null && models.size() > 0) {
+                        for (i in 0 until models.size()) {
+                            val item = models.get(i).asJsonObject
+                            val name = item.get("name")?.asString?.removePrefix("models/") ?: ""
+                            val methods = item.getAsJsonArray("supportedGenerationMethods")
+                            val canGen = methods?.any { it.asString == "generateContent" } == true
+                            if (canGen && name.isNotBlank()) {
+                                result.add(name)
+                            }
+                        }
+                    }
+                    if (result.isNotEmpty()) {
+                        defaultWorkingVersion = version
+                        Log.i(TAG, "Discovered ${result.size} models on $version: $result")
+                        break
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchAvailableModelsFromApi error on $version: ${e.message}")
+            }
+        }
+        return result
+    }
+
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         val cleanKey = getSanitizedKey()
         if (cleanKey.isBlank()) {
             return@withContext Result.failure(Exception("API Key is empty. Please paste your key from Google AI Studio."))
         }
 
-        for (candidate in FALLBACK_MODELS) {
-            for (ver in listOf("v1beta", "v1")) {
+        val discovered = fetchAvailableModelsFromApi(cleanKey)
+        if (discovered.isNotEmpty()) {
+            cachedAvailableModels = discovered
+        }
+
+        val candidateList = buildList {
+            if (discovered.isNotEmpty()) {
+                // Prioritize flash models from discovered list
+                addAll(discovered.filter { it.contains("flash", ignoreCase = true) })
+                addAll(discovered.filter { !it.contains("flash", ignoreCase = true) })
+            }
+            addAll(FALLBACK_CANDIDATES)
+        }.distinct()
+
+        for (candidate in candidateList) {
+            for (ver in listOf(defaultWorkingVersion, "v1beta", "v1").distinct()) {
                 val testResult = tryDirectGenerate(
                     cleanKey = cleanKey,
                     version = ver,
@@ -101,13 +155,13 @@ class GeminiClient(
                 if (testResult.isSuccess) {
                     defaultWorkingModel = candidate
                     defaultWorkingVersion = ver
-                    Log.i(TAG, "Validated working model: $candidate on $ver")
+                    Log.i(TAG, "Successfully validated active model: $candidate on $ver")
                     return@withContext Result.success(candidate)
                 }
             }
         }
 
-        Result.failure(Exception("Could not find a working Gemini model for your API key. Please check your key in Google AI Studio."))
+        Result.failure(Exception("Could not connect to Gemini. Please verify your API Key."))
     }
 
     suspend fun generateContent(
@@ -248,36 +302,53 @@ class GeminiClient(
         temperature: Double = 0.2,
         onChunk: suspend (accumulatedText: String) -> Unit
     ): Result<String> {
-        // Build candidate list with defaultWorkingModel first
-        val candidates = linkedSetOf<String>().apply {
-            add(defaultWorkingModel)
-            addAll(FALLBACK_MODELS)
-        }
+        val candidateModels = getCandidateModels(cleanKey)
+        var lastError = "Request failed"
 
-        var lastError = "Unknown error"
+        for (candidate in candidateModels) {
+            for (ver in listOf(defaultWorkingVersion, "v1beta", "v1").distinct()) {
+                val streamRes = tryStreamGenerate(
+                    cleanKey = cleanKey,
+                    version = ver,
+                    modelName = candidate,
+                    contentsArray = contentsArray,
+                    systemInstruction = systemInstruction,
+                    maxTokens = maxTokens,
+                    temperature = temperature,
+                    onChunk = onChunk
+                )
 
-        for (candidate in candidates) {
-            val result = tryStreamGenerate(
-                cleanKey = cleanKey,
-                version = defaultWorkingVersion,
-                modelName = candidate,
-                contentsArray = contentsArray,
-                systemInstruction = systemInstruction,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                onChunk = onChunk
-            )
+                if (streamRes.isSuccess && (streamRes.getOrNull()?.isNotBlank() == true)) {
+                    defaultWorkingModel = candidate
+                    defaultWorkingVersion = ver
+                    return streamRes
+                }
 
-            if (result.isSuccess) {
-                defaultWorkingModel = candidate
-                return result
-            } else {
-                val err = result.exceptionOrNull()?.message ?: ""
+                // If streaming failed, immediately try direct generation with the same model
+                val directRes = tryDirectGenerate(
+                    cleanKey = cleanKey,
+                    version = ver,
+                    modelName = candidate,
+                    contentsArray = contentsArray,
+                    systemInstruction = systemInstruction,
+                    maxTokens = maxTokens,
+                    temperature = temperature
+                )
+
+                if (directRes.isSuccess && (directRes.getOrNull()?.isNotBlank() == true)) {
+                    val fullText = directRes.getOrNull()!!
+                    onChunk(fullText)
+                    defaultWorkingModel = candidate
+                    defaultWorkingVersion = ver
+                    return directRes
+                }
+
+                val err = streamRes.exceptionOrNull()?.message ?: directRes.exceptionOrNull()?.message ?: ""
                 lastError = err
-                // If error is 404/not found, try next candidate
-                if (!err.contains("404") && !err.contains("not found", ignoreCase = true) && !err.contains("models/")) {
-                    // Non-model error (e.g. invalid API key), return immediately
-                    return result
+
+                // If API Key is fundamentally invalid or quota reached, stop looping
+                if (err.contains("API_KEY_INVALID", ignoreCase = true) || err.contains("RESOURCE_EXHAUSTED", ignoreCase = true)) {
+                    return Result.failure(Exception(err))
                 }
             }
         }
@@ -292,37 +363,59 @@ class GeminiClient(
         maxTokens: Int = 1200,
         temperature: Double = 0.2
     ): Result<String> {
-        val candidates = linkedSetOf<String>().apply {
-            add(defaultWorkingModel)
-            addAll(FALLBACK_MODELS)
-        }
+        val candidateModels = getCandidateModels(cleanKey)
+        var lastError = "Request failed"
 
-        var lastError = "Unknown error"
+        for (candidate in candidateModels) {
+            for (ver in listOf(defaultWorkingVersion, "v1beta", "v1").distinct()) {
+                val result = tryDirectGenerate(
+                    cleanKey = cleanKey,
+                    version = ver,
+                    modelName = candidate,
+                    contentsArray = contentsArray,
+                    systemInstruction = systemInstruction,
+                    maxTokens = maxTokens,
+                    temperature = temperature
+                )
 
-        for (candidate in candidates) {
-            val result = tryDirectGenerate(
-                cleanKey = cleanKey,
-                version = defaultWorkingVersion,
-                modelName = candidate,
-                contentsArray = contentsArray,
-                systemInstruction = systemInstruction,
-                maxTokens = maxTokens,
-                temperature = temperature
-            )
+                if (result.isSuccess && (result.getOrNull()?.isNotBlank() == true)) {
+                    defaultWorkingModel = candidate
+                    defaultWorkingVersion = ver
+                    return result
+                }
 
-            if (result.isSuccess) {
-                defaultWorkingModel = candidate
-                return result
-            } else {
                 val err = result.exceptionOrNull()?.message ?: ""
                 lastError = err
-                if (!err.contains("404") && !err.contains("not found", ignoreCase = true) && !err.contains("models/")) {
+
+                if (err.contains("API_KEY_INVALID", ignoreCase = true) || err.contains("RESOURCE_EXHAUSTED", ignoreCase = true)) {
                     return result
                 }
             }
         }
 
         return Result.failure(Exception(lastError))
+    }
+
+    private fun getCandidateModels(cleanKey: String): List<String> {
+        if (cachedAvailableModels.isEmpty()) {
+            try {
+                val discovered = fetchAvailableModelsFromApi(cleanKey)
+                if (discovered.isNotEmpty()) {
+                    cachedAvailableModels = discovered
+                }
+            } catch (e: Exception) {
+                // fallback to static list
+            }
+        }
+
+        return buildList {
+            add(defaultWorkingModel)
+            if (cachedAvailableModels.isNotEmpty()) {
+                addAll(cachedAvailableModels.filter { it.contains("flash", ignoreCase = true) })
+                addAll(cachedAvailableModels)
+            }
+            addAll(FALLBACK_CANDIDATES)
+        }.distinct()
     }
 
     private suspend fun tryStreamGenerate(
@@ -365,7 +458,8 @@ class GeminiClient(
                 return Result.failure(Exception(extractErrorMessage(response.code, errorBody)))
             }
 
-            val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
+            val bodyStream = response.body?.byteStream() ?: return Result.failure(Exception("Empty SSE stream"))
+            val reader = BufferedReader(InputStreamReader(bodyStream))
             val accumulated = StringBuilder()
             var line: String?
             while (reader.readLine().also { line = it } != null) {
@@ -400,7 +494,12 @@ class GeminiClient(
                     }
                 }
             }
-            Result.success(accumulated.toString().trim())
+            val resultText = accumulated.toString().trim()
+            if (resultText.isNotEmpty()) {
+                Result.success(resultText)
+            } else {
+                Result.failure(Exception("Empty streaming response"))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

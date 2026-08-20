@@ -34,6 +34,7 @@ class AppPreferences(private val context: Context) {
         val KEY_TRANSCRIBER_MODE = stringPreferencesKey("transcriber_mode") // "offline" or "groq"
         val KEY_AI_MODEL = stringPreferencesKey("ai_model")
         val KEY_OFFLINE_OCR_ONLY = booleanPreferencesKey("offline_ocr_only")
+        val KEY_PREFERRED_AI_ENGINE = stringPreferencesKey("preferred_ai_engine") // "auto", "groq", "gemini"
         val KEY_SHIZUKU_ENABLED = booleanPreferencesKey("shizuku_enabled")
         val KEY_HUB_WIDTH_DP = floatPreferencesKey("hub_width_dp")
     }
@@ -46,6 +47,7 @@ class AppPreferences(private val context: Context) {
     
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[KEY_GEMINI_API_KEY] ?: "" }
     val groqApiKey: Flow<String> = context.dataStore.data.map { it[KEY_GROQ_API_KEY] ?: "" }
+    val preferredAiEngine: Flow<String> = context.dataStore.data.map { it[KEY_PREFERRED_AI_ENGINE] ?: "auto" }
     val transcriberMode: Flow<String> = context.dataStore.data.map { it[KEY_TRANSCRIBER_MODE] ?: "offline" }
     val aiModel: Flow<String> = context.dataStore.data.map { it[KEY_AI_MODEL] ?: "gemini-1.5-flash" }
     val offlineOcrOnly: Flow<Boolean> = context.dataStore.data.map { it[KEY_OFFLINE_OCR_ONLY] ?: false }
@@ -57,6 +59,7 @@ class AppPreferences(private val context: Context) {
     suspend fun setBallOpacity(opacity: Float) = context.dataStore.edit { it[KEY_BALL_OPACITY] = opacity }
     suspend fun setGeminiApiKey(key: String) = context.dataStore.edit { it[KEY_GEMINI_API_KEY] = key }
     suspend fun setGroqApiKey(key: String) = context.dataStore.edit { it[KEY_GROQ_API_KEY] = key }
+    suspend fun setPreferredAiEngine(engine: String) = context.dataStore.edit { it[KEY_PREFERRED_AI_ENGINE] = engine }
     suspend fun setTranscriberMode(mode: String) = context.dataStore.edit { it[KEY_TRANSCRIBER_MODE] = mode }
     suspend fun setAiModel(model: String) = context.dataStore.edit { it[KEY_AI_MODEL] = model }
     suspend fun setOfflineOcrOnly(enabled: Boolean) = context.dataStore.edit { it[KEY_OFFLINE_OCR_ONLY] = enabled }

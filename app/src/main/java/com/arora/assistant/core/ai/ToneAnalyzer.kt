@@ -18,13 +18,29 @@ Output format:
 3. **Neutral/Professional:** [suggested reply]"""
 
     suspend fun analyzeMessageTone(
-        client: GeminiClient,
+        geminiClient: GeminiClient? = null,
+        groqClient: GroqClient? = null,
         messageText: String
     ): Result<String> {
         val prompt = "Analyze the tone of this message:\n\"$messageText\""
-        return client.generateContent(
-            prompt = prompt,
-            systemInstruction = TONE_SYSTEM_PROMPT
-        )
+
+        if (groqClient != null) {
+            val res = groqClient.generateContent(
+                prompt = prompt,
+                systemInstruction = TONE_SYSTEM_PROMPT
+            )
+            if (res.isSuccess && !res.getOrNull().isNullOrBlank()) {
+                return res
+            }
+        }
+
+        if (geminiClient != null) {
+            return geminiClient.generateContent(
+                prompt = prompt,
+                systemInstruction = TONE_SYSTEM_PROMPT
+            )
+        }
+
+        return Result.failure(Exception("No AI client configured for tone analysis"))
     }
 }

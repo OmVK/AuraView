@@ -706,10 +706,10 @@ fun FloatingLiveTranscriberView(
                             if (combined.isNotBlank()) {
                                 scope.launch {
                                     isSummarizing = true
-                                    val apiKey = appPreferences.geminiApiKey.first()
-                                    if (apiKey.isNotBlank()) {
-                                        val client = com.arora.assistant.core.ai.GeminiClient(apiKey)
-                                        val prompt = """You are a professional meeting intelligence engine.
+                                    val groqApiKey = appPreferences.groqApiKey.first()
+                                    val geminiApiKey = appPreferences.geminiApiKey.first()
+
+                                    val prompt = """You are a professional meeting intelligence engine.
 
 Analyze this transcript and extract ONLY what was explicitly said.
 NEVER invent names, dates, deadlines, or facts not present in the transcript.
@@ -734,12 +734,27 @@ Output STRICTLY in this format — do not add any extra sections:
 ## Open Questions
 [Unresolved items that need follow-up]
 - [question]"""
+
+                                    // 1. Try Groq LPU first
+                                    if (groqApiKey.isNotBlank()) {
+                                        val groq = com.arora.assistant.core.ai.GroqClient(groqApiKey)
+                                        val groqRes = groq.generateContent(prompt)
+                                        if (groqRes.isSuccess && !groqRes.getOrNull().isNullOrBlank()) {
+                                            isSummarizing = false
+                                            meetingSummary = groqRes.getOrNull()
+                                            return@launch
+                                        }
+                                    }
+
+                                    // 2. Fallback to Gemini
+                                    if (geminiApiKey.isNotBlank()) {
+                                        val client = com.arora.assistant.core.ai.GeminiClient(geminiApiKey)
                                         val res = client.generateContent(prompt)
                                         isSummarizing = false
                                         meetingSummary = res.getOrElse { "Error: ${it.message}" }
                                     } else {
                                         isSummarizing = false
-                                        meetingSummary = "Add Gemini Key in Settings to generate instant AI meeting summaries & action items."
+                                        meetingSummary = "Add Groq or Gemini Key in Settings to generate instant AI meeting summaries & action items."
                                     }
                                 }
                             }

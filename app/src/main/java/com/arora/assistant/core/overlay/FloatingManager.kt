@@ -78,6 +78,8 @@ import com.arora.assistant.ui.theme.SoftLavender
 import com.arora.assistant.ui.theme.SoftSurface
 import com.arora.assistant.ui.theme.SoftSurfaceElevated
 
+val LocalWindowFocusRequester = androidx.compose.runtime.staticCompositionLocalOf<((Boolean) -> Unit)?> { null }
+
 class FloatingManager(private val context: Context) {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -95,17 +97,41 @@ class FloatingManager(private val context: Context) {
         override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
     }
 
+    fun setWindowFocusable(view: View, focusable: Boolean) {
+        try {
+            val params = view.layoutParams as? WindowManager.LayoutParams ?: return
+            val oldFlags = params.flags
+            if (focusable) {
+                params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            } else {
+                params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            }
+            if (oldFlags != params.flags) {
+                windowManager.updateViewLayout(view, params)
+            }
+        } catch (e: Exception) {
+            // View may already be detached
+        }
+    }
+
     fun createFloatingComposeView(
         layoutParams: WindowManager.LayoutParams,
         content: @Composable () -> Unit
     ): ComposeView {
         val lifecycleOwner = OverlayLifecycleOwner()
-        val composeView = ComposeView(context).apply {
+        lateinit var composeView: ComposeView
+        composeView = ComposeView(context).apply {
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
             setContent {
-                AroraTheme {
-                    content()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    LocalWindowFocusRequester provides { isFocused ->
+                        setWindowFocusable(composeView, isFocused)
+                    }
+                ) {
+                    AroraTheme {
+                        content()
+                    }
                 }
             }
         }
@@ -155,7 +181,9 @@ class FloatingManager(private val context: Context) {
             y = initialY,
             flags = windowFlags,
             gravity = Gravity.TOP or Gravity.START
-        )
+        ).apply {
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
 
         lateinit var composeView: ComposeView
         var isMinimized by mutableStateOf(false)

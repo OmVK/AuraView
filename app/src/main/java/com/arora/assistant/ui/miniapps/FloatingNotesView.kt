@@ -166,14 +166,20 @@ fun FloatingNotesView(
                     onClick = {
                         scope.launch {
                             isSummarizing = true
-                            val apiKey = appPreferences.geminiApiKey.first()
-                            if (apiKey.isBlank()) {
-                                Toast.makeText(context, "Set Gemini API Key in Settings first", Toast.LENGTH_SHORT).show()
+                            val geminiKey = appPreferences.geminiApiKey.first()
+                            val groqKey = appPreferences.groqApiKey.first()
+                            if (geminiKey.isBlank() && groqKey.isBlank()) {
+                                Toast.makeText(context, "Set Groq or Gemini API Key in Settings first", Toast.LENGTH_SHORT).show()
                                 isSummarizing = false
                                 return@launch
                             }
-                            val client = com.arora.assistant.core.ai.GeminiClient(apiKey)
-                            val summaryResult = com.arora.assistant.core.ai.SessionSummarizer.summarizeSession(context, client)
+                            val geminiClient = if (geminiKey.isNotBlank()) com.arora.assistant.core.ai.GeminiClient(geminiKey) else null
+                            val groqClient = if (groqKey.isNotBlank()) com.arora.assistant.core.ai.GroqClient(groqKey) else null
+                            val summaryResult = com.arora.assistant.core.ai.SessionSummarizer.summarizeSession(
+                                context = context,
+                                geminiClient = geminiClient,
+                                groqClient = groqClient
+                            )
                             isSummarizing = false
                             summaryResult.onSuccess { summary ->
                                 noteText = noteText + "\n\n## 📝 Session Summary\n" + summary
